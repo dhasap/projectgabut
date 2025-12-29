@@ -1,0 +1,8 @@
+aiogram==2.13
+requests
+PyYAML
+bs4
+Faker
+psutil
+supabase
+cryptography
