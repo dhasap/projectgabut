@@ -329,8 +329,9 @@ def get_reply_keyboard(is_admin=False):
     # Row 2: Generator & Identity (Buat Data)
     markup.row("👤 Fake ID", "🏦 Fake IBAN", "⚙️ CC Gen")
     
-    # Row 3: Mail Management (Kelola Email)
-    markup.row("📩 Cek Inbox", "🔄 Ganti Akun", "📝 Notes")
+    # Row 3: Mail Management & Notes (Kelola Email)
+    # Menambahkan tombol utama Temp Mail agar konsisten
+    markup.row("📧 Temp Mail", "📝 Notes")
     
     # Row 4: System (Info & Bantuan)
     if is_admin:
@@ -665,10 +666,10 @@ async def helpstr(message: types.Message):
         await message.answer(start_msg, reply_markup=kb_start, disable_web_page_preview=True)
     
     # Send Reply Keyboard (Menu Bawah) - Persistent Menu
-    # is_admin_user = await is_owner(message.from_user.id)
-    # reply_kb = get_reply_keyboard(is_admin_user)
-    # await message.answer("👇 <b>Menu Pintas</b>", reply_markup=reply_kb)
-    pass
+    # Mengirim keyboard update dengan pesan minimalis agar menu di HP user ter-refresh
+    is_admin_user = await is_owner(message.from_user.id)
+    reply_kb = get_reply_keyboard(is_admin_user)
+    await message.answer("⌨️", reply_markup=reply_kb)
 
 
 @dp.message_handler(commands=['note', 'notes'], commands_prefix=PREFIX)

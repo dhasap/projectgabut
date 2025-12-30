@@ -1,4 +1,4 @@
-aiogram==2.13
+aiogram==2.25.1
 requests
 PyYAML
 bs4
