@@ -5,4 +5,4 @@ bs4
 Faker
 psutil
 supabase
-cryptography
+cryptographymysql-connector-python

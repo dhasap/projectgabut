@@ -655,10 +655,9 @@ async def helpstr(message: types.Message):
         await message.answer(start_msg, reply_markup=kb_start, disable_web_page_preview=True)
     
     # Send Reply Keyboard (Menu Bawah) - Persistent Menu
-    # Mengirim keyboard update dengan pesan minimalis agar menu di HP user ter-refresh
-    is_admin_user = await is_owner(message.from_user.id)
-    reply_kb = get_reply_keyboard(is_admin_user)
-    await message.answer("⌨️", reply_markup=reply_kb)
+    # Removed separate ⌨️ message to keep it aesthetic as requested.
+    # User can still access menu via the commands or previous keyboard if already present.
+    pass
 
 
 # --- NOTES FEATURE (INLINE INTERFACE) ---
