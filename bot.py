@@ -1223,7 +1223,7 @@ async def cmd_set_help(message: types.Message):
     log_admin_action(message.from_user, "SET_HELP", "Updated help message")
     await message.reply("✅ Pesan Help berhasil diubah!")
 
-@dp.message_handler(lambda message: message.text in ["📊 Stats", "📢 Broadcast", "⛔ User Control", "🎛️ Features", "👁️ Spy Mode", "🚧 Maint. Mode", "🏥 System Health", "👥 Admins", "🔙 Exit Admin", "✏️ Edit Texts", "📜 Admin Logs"])
+@dp.message_handler(lambda message: message.text in ["📊 Stats", "📢 Broadcast", "⛔ User Control", "🎛️ Features", "👁️ Spy Mode", "🚧 Maint. Mode", "🏥 System Health", "👥 Admins", "🔙 Exit Admin", "✏️ Edit Texts", "📜 Admin Logs", "🎹 Menu Editor"])
 async def process_admin_keyboard(message: types.Message):
     if message.from_user.id not in get_admins(): return
     
