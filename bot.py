@@ -115,25 +115,104 @@ ANTISPAM = int(os.getenv('ANTISPAM', CONFIG['antispam']))
 from aiogram.dispatcher.middlewares import BaseMiddleware
 from aiogram.dispatcher.handler import CancelHandler
 
+# SECURITY SETTINGS
+USER_THROTTLE = {} 
+USER_MAIL_COOLDOWN = {} # Anti-Spam Mail (2 Menit)
+THROTTLE_TIME = 1.5 # Detik (Jeda antar pesan)
+FORCE_SUB_CHANNEL = "@azkuraairdrop"
+FORCE_SUB_CACHE = {} # Cache status sub selama 5 menit
+
+# AUTO-BAN SYSTEM (Anti-DDoS Application Layer)
+USER_VIOLATIONS = {} # {user_id: count}
+TEMP_BANNED = {}     # {user_id: expiry_timestamp}
+VIOLATION_LIMIT = 5  # Max spam
+BAN_DURATION = 600   # 10 Menit
+
 class AccessMiddleware(BaseMiddleware):
-    """Middleware untuk cek Ban dan Maintenance Mode."""
+    """Middleware: Auto-Ban, Rate Limit, Ban, Maintenance, Force Sub."""
     
     async def on_process_message(self, message: types.Message, data: dict):
         user_id = message.from_user.id
+        current_time = time.time()
         
-        # 1. Cek Banned
-        if str(user_id) in get_banned_users():
-             raise CancelHandler() # Ignore completely
-             
-        # 2. Cek Maintenance (Skip for Admins)
-        if BOT_STATE["maintenance"]:
-            if user_id not in get_admins():
-                await message.reply("🚧 <b>BOT UNDER MAINTENANCE</b>\nBot sedang dalam perbaikan. Silakan coba lagi nanti.")
+        # 0. CEK TEMP BAN (Hukuman Otomatis)
+        # Jika user sedang dihukum, tolak semua request tanpa proses apapun (Hemat CPU)
+        if user_id in TEMP_BANNED:
+            if current_time < TEMP_BANNED[user_id]:
                 raise CancelHandler()
+            else:
+                # Hukuman selesai
+                del TEMP_BANNED[user_id]
+                if user_id in USER_VIOLATIONS: del USER_VIOLATIONS[user_id]
+        
+        # 1. RATE LIMITING (RAM - Ultra Fast)
+        if len(USER_THROTTLE) > 2000: USER_THROTTLE.clear()
+        
+        last_time = USER_THROTTLE.get(user_id, 0)
+        if current_time - last_time < THROTTLE_TIME:
+            # SPAM DETECTED
+            USER_VIOLATIONS[user_id] = USER_VIOLATIONS.get(user_id, 0) + 1
+            
+            # Jika sudah melanggar 5x berturut-turut -> BANNED 10 MENIT
+            if USER_VIOLATIONS[user_id] >= VIOLATION_LIMIT:
+                TEMP_BANNED[user_id] = current_time + BAN_DURATION
+                # Kita tidak kirim notifikasi agar tidak membebani bot (Silent Ban)
+            
+            raise CancelHandler()
+        
+        USER_THROTTLE[user_id] = current_time
+        
+        # Reward Good Behavior: Kurangi violation count jika user normal
+        if user_id in USER_VIOLATIONS and USER_VIOLATIONS[user_id] > 0:
+             USER_VIOLATIONS[user_id] -= 1
+        
+        # 2. CEK BANNED (RAM Cache - Fast)
+        # Menggunakan set lookup (O(1)) dari cache database
+        if str(user_id) in get_banned_users():
+             raise CancelHandler()
+             
+        # Pre-fetch Admin Status (RAM Cache - Fast)
+        is_admin = (user_id == OWNER) or (user_id in get_admins())
 
-        # 3. SPY MODE CHECK
-        # Jika Spy Mode aktif, dan user bukan admin/owner, forward pesan ke SPY_ADMIN
-        if SPY_MODE and SPY_ADMIN and user_id != SPY_ADMIN and user_id not in get_admins():
+        # 3. CEK MAINTENANCE
+        if BOT_STATE["maintenance"] and not is_admin:
+            await message.reply("🚧 <b>BOT UNDER MAINTENANCE</b>\nBot sedang dalam perbaikan. Silakan coba lagi nanti.")
+            raise CancelHandler()
+
+        # 4. FORCE SUBSCRIBE (API Call - Slowest, executed last)
+        # Skip untuk Admin atau Group Chat
+        if message.chat.type == 'private' and not is_admin:
+            # Cek Cache Lokal (Valid 300 detik)
+            if user_id not in FORCE_SUB_CACHE or current_time > FORCE_SUB_CACHE[user_id]:
+                try:
+                    member = await bot.get_chat_member(FORCE_SUB_CHANNEL, user_id)
+                    if member.status in ['left', 'kicked']:
+                        # UI Force Sub
+                        kb = types.InlineKeyboardMarkup()
+                        kb.add(types.InlineKeyboardButton("🚀 GABUNG CHANNEL", url=f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"))
+                        kb.add(types.InlineKeyboardButton("🔄 CEK STATUS", callback_data="check_sub"))
+                        
+                        text = (
+                            "<b>🔐 AKSES TERKUNCI</b>\n"
+                            "━━━━━━━━━━━━━━━━━━\n"
+                            "Halo kawan! 👋\n"
+                            "Untuk menggunakan bot ini secara <b>GRATIS</b>, mohon dukung kami dengan bergabung ke channel resmi.\n\n"
+                            "✅ <i>Update Fitur Terbaru</i>\n"
+                            "✅ <i>Info Airdrop Legit</i>\n"
+                            "✅ <i>Komunitas Solid</i>\n\n"
+                            "<b>Klik tombol di bawah untuk membuka kunci!</b> 🔓"
+                        )
+                        await message.answer(text, reply_markup=kb)
+                        raise CancelHandler()
+                    else:
+                        # Cache status "Joined"
+                        FORCE_SUB_CACHE[user_id] = current_time + 300
+                except Exception:
+                    # Loloskan jika bot error/bukan admin channel
+                    pass
+
+        # 5. SPY MODE CHECK
+        if SPY_MODE and SPY_ADMIN and not is_admin and user_id != SPY_ADMIN:
             try:
                 spy_msg = (
                     f"🕵️ <b>SPY ALERT</b>\n"
@@ -229,7 +308,7 @@ def unban_user(user_id):
 
 
 # TEMP MAIL STORAGE
-USER_MAILS = {} # Current Active Session
+# USER_MAILS = {} # Moved to DB: temp_mail_sessions
 LAST_GEN_ID = {} # Last Generated Fake ID (for Save to Note feature)
 SAVED_MAILS = {} # History List: {user_id: [ {email, password, token}, ... ]}
 
@@ -386,6 +465,37 @@ async def process_gen_callback(callback_query: types.CallbackQuery):
     
     # Call the existing generator handler
     await gen_cc(fake_message)
+
+
+@dp.callback_query_handler(lambda c: c.data == 'check_sub', state="*")
+async def check_sub_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    try:
+        # Re-check membership
+        member = await bot.get_chat_member(FORCE_SUB_CHANNEL, user_id)
+        if member.status in ['left', 'kicked']:
+            await callback_query.answer("❌ Kamu belum join channel! Silakan gabung dulu.", show_alert=True)
+        else:
+            # Update Cache (Allow access)
+            FORCE_SUB_CACHE[user_id] = time.time() + 300
+            await callback_query.answer("✅ Akses Diterima! Selamat datang.", show_alert=True)
+            
+            # Delete lock message
+            try: await callback_query.message.delete()
+            except: pass
+            
+            # Send Start Menu
+            fake_msg = callback_query.message
+            fake_msg.from_user = callback_query.from_user
+            fake_msg.text = "/start"
+            await helpstr(fake_msg)
+            
+    except Exception:
+        # If error (bot not admin), allow pass to avoid getting stuck
+        FORCE_SUB_CACHE[user_id] = time.time() + 300
+        await callback_query.answer("⚠️ Bot error, passing allowed.", show_alert=True)
+        try: await callback_query.message.delete()
+        except: pass
 
 
 @dp.callback_query_handler(lambda c: c.data in ['m_bin', 'm_chk', 'm_info', 'm_main', 'm_gen', 'm_mail', 'm_fake', 'm_rnd', 'm_iban'])
@@ -754,6 +864,17 @@ async def state_note_title(message: types.Message, state: FSMContext):
 @dp.message_handler(state=NoteState.content)
 async def state_note_content(message: types.Message, state: FSMContext):
     content = message.text.strip()
+    
+    # SECURITY: Content Length Limit
+    if len(content) > 2000:
+        return await message.reply("⚠️ <b>Catatan Terlalu Panjang!</b>\nMaksimal 2000 karakter.")
+    
+    # SECURITY: Quota Limit
+    existing = db.db_get_notes_list(message.from_user.id)
+    if len(existing) >= 50:
+        await state.finish()
+        return await message.reply("⚠️ <b>Kuota Penuh!</b>\nMaksimal 50 catatan per user. Silakan hapus catatan lama.")
+
     data = await state.get_data()
     title = data['title']
     
@@ -1096,12 +1217,17 @@ async def broadcast_msg(message: types.Message):
         
         log_admin_action(message.from_user, "BROADCAST_FWD", f"To {len(users)} users")
         
-        for uid in users:
+        for i, uid in enumerate(users):
             try:
                 # Use forward_message as it is safest in 2.x
                 await src.forward(uid)
                 count += 1
-                await asyncio.sleep(0.1) 
+                
+                # Smart Delay (Anti-Flood)
+                if i % 20 == 0:
+                    await asyncio.sleep(1.5) # Istirahat tiap 20 pesan
+                else:
+                    await asyncio.sleep(0.05) 
             except: pass
             
     # Mode 2: Text Broadcast (With Buttons Support)
@@ -1132,11 +1258,16 @@ async def broadcast_msg(message: types.Message):
         await message.reply(f"🚀 Memulai text broadcast ke {len(users)} pengguna...")
         log_admin_action(message.from_user, "BROADCAST_TXT", f"Msg: {msg_text[:20]}...")
         
-        for uid in users:
+        for i, uid in enumerate(users):
             try:
                 await bot.send_message(uid, f"<b>📢 PENGUMUMAN</b>\n\n{msg_text}", reply_markup=kb)
                 count += 1
-                await asyncio.sleep(0.1)
+                
+                # Smart Delay
+                if i % 20 == 0:
+                    await asyncio.sleep(1.5)
+                else:
+                    await asyncio.sleep(0.05)
             except: pass
             
     await message.reply(f"✅ Broadcast selesai. Terkirim ke {count} pengguna.")
@@ -1231,7 +1362,7 @@ async def process_admin_keyboard(message: types.Message):
     if text == "📊 Stats":
         u_count = get_users_count()
         b_count = len(get_banned_users())
-        mail_sessions = len(USER_MAILS)
+        # mail_sessions = len(USER_MAILS) # Deprecated
         
         # System Info
         import platform, psutil
@@ -1243,11 +1374,10 @@ async def process_admin_keyboard(message: types.Message):
 ━━━━━━━━━━━━━━━━━━
 👥 <b>Total Users:</b> {u_count}
 ⛔ <b>Banned Users:</b> {b_count}
-📧 <b>Active Mail Sessions:</b> {mail_sessions}
 🤖 <b>OS:</b> {uname.system}
 🧠 <b>RAM:</b> {ram.percent}% Used
 
-☁️ <b>Database:</b> Supabase (Cloud)
+☁️ <b>Database:</b> Supabase/TiDB (Cloud)
 """
         await message.reply(info_txt)
         
@@ -1945,8 +2075,10 @@ async def info(message: types.Message):
     
     # Check Temp Mail Session
     mail_sess = "Tidak ada"
-    if user_id in USER_MAILS:
-        mail_sess = f"<code>{USER_MAILS[user_id]['email']}</code>"
+    # Check DB
+    db_sess = db.db_get_mail_session(user_id)
+    if db_sess:
+        mail_sess = f"<code>{db_sess['email']}</code>"
 
     msg = f'''
 <b>👤 USER PROFILE</b>
@@ -2410,6 +2542,14 @@ async def gen_cc(message: types.Message):
         origin_type = f"Auto-{param1.upper()}"
     else:
         raw_data = param1
+        # SECURITY CHECK (Input Validation)
+        # Hanya izinkan angka, 'x' (random), dan '|' (pemisah)
+        if not re.match(r'^[0-9xX|]+$', raw_data):
+            return await message.reply(
+                "⚠️ <b>Input Tidak Aman!</b>\n"
+                "Format BIN hanya boleh mengandung Angka dan 'x'.\n"
+                "Contoh: <code>454141xxxx</code>"
+            )
         origin_type = "Manual"
 
     # Parsing Format (CC|MM|YY|CVV)
@@ -2584,8 +2724,13 @@ def get_mail_messages(token):
 
 @dp.message_handler(commands=['mail'], commands_prefix=PREFIX)
 async def gen_mail(message: types.Message):
-    await message.answer_chat_action('typing')
+    # SECURITY: Cooldown 2 Minutes
     user_id = message.from_user.id
+    last_gen = USER_MAIL_COOLDOWN.get(user_id, 0)
+    if time.time() - last_gen < 120 and user_id not in get_admins():
+        return await message.reply("⏳ <b>Cooldown!</b>\nMohon tunggu 2 menit sebelum membuat email baru lagi.")
+
+    await message.answer_chat_action('typing')
     
     # Arg parsing: /mail [username] [password]
     args = message.text.split()
@@ -2626,12 +2771,11 @@ async def gen_mail(message: types.Message):
         # 5. Get Token
         token = get_mail_token(email, password)
         if token:
-            # Save to memory
-            USER_MAILS[user_id] = {
-                "email": email,
-                "password": password,
-                "token": token
-            }
+            # Update Cooldown
+            USER_MAIL_COOLDOWN[user_id] = time.time()
+            
+            # Save to DB
+            db.db_save_mail_session(user_id, email, password, token)
             save_email_session(user_id, email, password, token)
             
             kb = types.InlineKeyboardMarkup(row_width=2)
@@ -2674,12 +2818,8 @@ async def login_mail(message: types.Message):
     token = get_mail_token(email, password)
     
     if token:
-        # Save to memory
-        USER_MAILS[user_id] = {
-            "email": email,
-            "password": password,
-            "token": token
-        }
+        # Save to DB
+        db.db_save_mail_session(user_id, email, password, token)
         save_email_session(user_id, email, password, token)
         
         kb = types.InlineKeyboardMarkup(row_width=2)
@@ -2771,9 +2911,16 @@ async def state_mail_password(message: types.Message, state: FSMContext):
     await execute_custom_mail(message, state, password=password)
 
 async def execute_custom_mail(message: types.Message, state: FSMContext, password=None, use_random_pass=False):
+    # SECURITY: Cooldown
+    user_id = message.chat.id
+    last_gen = USER_MAIL_COOLDOWN.get(user_id, 0)
+    if time.time() - last_gen < 120 and user_id not in get_admins():
+        await state.finish()
+        return await message.reply("⏳ <b>Cooldown!</b>\nTunggu 2 menit sebelum membuat email baru.")
+
     data = await state.get_data()
     username = data['username']
-    user_id = message.chat.id # Chat ID is User ID in PM
+    # user_id already defined above
     
     if use_random_pass:
         password = "Pwd" + ''.join(random.choices(string.ascii_letters + string.digits, k=8))
@@ -2793,12 +2940,11 @@ async def execute_custom_mail(message: types.Message, state: FSMContext, passwor
     if create_mail_account(email, password):
         token = get_mail_token(email, password)
         if token:
+            # Update Cooldown
+            USER_MAIL_COOLDOWN[user_id] = time.time()
+            
             # Save
-            USER_MAILS[user_id] = {
-                "email": email,
-                "password": password,
-                "token": token
-            }
+            db.db_save_mail_session(user_id, email, password, token)
             save_email_session(user_id, email, password, token)
             
             kb = types.InlineKeyboardMarkup(row_width=2)
@@ -2871,7 +3017,8 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     end_idx = start_idx + MAX_PER_PAGE
     current_page_items = saved[start_idx:end_idx]
     
-    current_email = USER_MAILS.get(user_id, {}).get('email', '')
+    sess = db.db_get_mail_session(user_id)
+    current_email = sess['email'] if sess else ''
     
     kb = types.InlineKeyboardMarkup(row_width=1)
     
@@ -2945,10 +3092,10 @@ async def delete_saved_mail_callback(callback_query: types.CallbackQuery):
     deleted_email = saved[idx]['email']
     
     # Check if active
-    current = USER_MAILS.get(user_id, {})
+    current = db.db_get_mail_session(user_id) or {}
     if current.get('email') == deleted_email:
         # Clear active session if we delete the active one
-        USER_MAILS.pop(user_id, None)
+        db.db_delete_mail_session(user_id)
         
     # Delete from list
     saved.pop(idx)
@@ -2987,7 +3134,8 @@ async def list_emails(message: types.Message):
     page = 0
     
     current_page_items = saved[0:MAX_PER_PAGE]
-    current_email = USER_MAILS.get(user_id, {}).get('email', '')
+    sess = db.db_get_mail_session(user_id)
+    current_email = sess['email'] if sess else ''
     
     kb = types.InlineKeyboardMarkup(row_width=1)
     for i, data in enumerate(current_page_items):
@@ -3028,7 +3176,7 @@ async def switch_mail_callback(callback_query: types.CallbackQuery):
     selected_account = saved[idx]
     
     # Set as Active
-    USER_MAILS[user_id] = selected_account
+    db.db_save_mail_session(user_id, selected_account['email'], selected_account['password'], selected_account['token'])
     
     email = selected_account['email']
     
@@ -3068,7 +3216,7 @@ def delete_mail_message(token, msg_id):
 async def read_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     msg_id = callback_query.data.split('_')[1]
-    user_data = USER_MAILS.get(user_id)
+    user_data = db.db_get_mail_session(user_id)
     
     if not user_data:
         return await bot.answer_callback_query(callback_query.id, "⚠️ Sesi berakhir.", show_alert=True)
@@ -3110,7 +3258,7 @@ async def read_mail_callback(callback_query: types.CallbackQuery):
 async def delete_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     msg_id = callback_query.data.split('_')[1]
-    user_data = USER_MAILS.get(user_id)
+    user_data = db.db_get_mail_session(user_id)
     
     if user_data and delete_mail_message(user_data['token'], msg_id):
         await bot.answer_callback_query(callback_query.id, "✅ Pesan dihapus.")
@@ -3170,7 +3318,7 @@ async def fake_identity(message: types.Message):
             if create_mail_account(email_addr, password):
                 token = get_mail_token(email_addr, password)
                 if token:
-                    USER_MAILS[user_id] = {"email": email_addr, "password": password, "token": token}
+                    db.db_save_mail_session(user_id, email_addr, password, token)
                     save_email_session(user_id, email_addr, password, token)
                     email_status = "🟢 Active"
                 else:
@@ -3327,8 +3475,10 @@ async def auto_check_mail():
     """Background task to check for new emails for all active users."""
     while True:
         try:
-            # Iterate copy of keys to avoid runtime error if dict changes size
-            for user_id, data in list(USER_MAILS.items()):
+            # Iterate active sessions from DB
+            sessions = db.db_get_all_mail_sessions()
+            for data in sessions:
+                user_id = data['user_id']
                 token = data.get('token')
                 last_id = data.get('last_msg_id')
                 
@@ -3340,7 +3490,7 @@ async def auto_check_mail():
                     if newest_id != last_id:
                         # New message found!
                         # Update last_id immediately to avoid spam
-                        USER_MAILS[user_id]['last_msg_id'] = newest_id
+                        db.db_update_mail_last_id(user_id, newest_id)
                         
                         sender = newest_msg.get('from', {}).get('address', 'Unknown')
                         subject = newest_msg.get('subject', 'No Subject')
@@ -3360,7 +3510,7 @@ async def auto_check_mail():
                         except Exception as e:
                             # User might have blocked bot
                             if "bot was blocked" in str(e):
-                                USER_MAILS.pop(user_id, None)
+                                db.db_delete_mail_session(user_id)
                                 
         except Exception as e:
             logging.error(f"Auto check mail error: {e}")

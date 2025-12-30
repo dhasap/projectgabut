@@ -1,9 +1,24 @@
 import os
 import logging
 import json
+import time
 from datetime import datetime
 import base64
 from cryptography.fernet import Fernet
+
+# --- CACHE STORAGE (SMART CACHING) ---
+# Menyimpan data di RAM untuk akses super cepat.
+# Cache akan otomatis dihapus (invalidated) jika ada perubahan data (add/delete).
+_CACHE_BANNED = {"data": set(), "expiry": 0}
+_CACHE_ADMINS = {"data": set(), "expiry": 0}
+CACHE_TTL = 300 # 5 Menit (Fallback jika tidak ada event update)
+
+def invalidate_cache(cache_type):
+    """Menghapus cache agar data diambil ulang dari DB."""
+    if cache_type == "banned":
+        _CACHE_BANNED["expiry"] = 0
+    elif cache_type == "admins":
+        _CACHE_ADMINS["expiry"] = 0
 
 # --- DATABASE ADAPTER INTERFACE ---
 class DatabaseAdapter:
@@ -26,6 +41,11 @@ class DatabaseAdapter:
     def get_notes_list(self, user_id): return []
     def get_note_content(self, user_id, title): return None
     def delete_note(self, user_id, title): return False
+    def save_mail_session(self, user_id, email, password, token): pass
+    def get_mail_session(self, user_id): return None
+    def delete_mail_session(self, user_id): return False
+    def get_all_mail_sessions(self): return []
+    def update_mail_last_id(self, user_id, msg_id): pass
     def initialize(self): pass
 
 # --- SUPABASE IMPLEMENTATION ---
@@ -73,11 +93,19 @@ class SupabaseAdapter(DatabaseAdapter):
         return None
 
     def get_admins(self, owner_id):
+        # Caching Layer (Smart Cache)
+        if time.time() < _CACHE_ADMINS["expiry"]:
+            return _CACHE_ADMINS["data"]
+
         admins = {int(owner_id)}
         try:
             response = self.client.table("admins").select("user_id").execute()
             for item in response.data:
                 admins.add(int(item['user_id']))
+            
+            # Update Cache
+            _CACHE_ADMINS["data"] = admins
+            _CACHE_ADMINS["expiry"] = time.time() + CACHE_TTL
         except Exception as e:
             logging.error(f"Supabase Error get_admins: {e}")
         return admins
@@ -90,6 +118,7 @@ class SupabaseAdapter(DatabaseAdapter):
                 "promoted_at": datetime.utcnow().isoformat()
             }
             self.client.table("admins").insert(data).execute()
+            invalidate_cache("admins") # Reset Cache
             return True
         except Exception as e:
             logging.error(f"Supabase Error add_admin: {e}")
@@ -98,17 +127,26 @@ class SupabaseAdapter(DatabaseAdapter):
     def remove_admin(self, user_id):
         try:
             self.client.table("admins").delete().eq("user_id", user_id).execute()
+            invalidate_cache("admins") # Reset Cache
             return True
         except Exception as e:
             logging.error(f"Supabase Error remove_admin: {e}")
             return False
 
     def get_banned(self):
+        # Caching Layer (Smart Cache)
+        if time.time() < _CACHE_BANNED["expiry"]:
+            return _CACHE_BANNED["data"]
+            
         banned = set()
         try:
             response = self.client.table("banned").select("user_id").execute()
             for item in response.data:
                 banned.add(str(item['user_id']))
+                
+            # Update Cache
+            _CACHE_BANNED["data"] = banned
+            _CACHE_BANNED["expiry"] = time.time() + CACHE_TTL
         except Exception as e:
             logging.error(f"Supabase Error get_banned: {e}")
         return banned
@@ -122,6 +160,7 @@ class SupabaseAdapter(DatabaseAdapter):
                 "banned_at": datetime.utcnow().isoformat()
             }
             self.client.table("banned").upsert(data).execute()
+            invalidate_cache("banned") # Reset Cache
             return True
         except Exception as e:
             logging.error(f"Supabase Error ban_user: {e}")
@@ -130,6 +169,7 @@ class SupabaseAdapter(DatabaseAdapter):
     def unban_user(self, user_id):
         try:
             self.client.table("banned").delete().eq("user_id", user_id).execute()
+            invalidate_cache("banned") # Reset Cache
             return True
         except Exception as e:
             logging.error(f"Supabase Error unban_user: {e}")
@@ -222,11 +262,57 @@ class SupabaseAdapter(DatabaseAdapter):
             logging.error(f"Supabase Error delete_note: {e}")
             return False
 
+    def save_mail_session(self, user_id, email, password, token):
+        try:
+            data = {
+                "user_id": user_id,
+                "email": email,
+                "password": password,
+                "token": token,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            self.client.table("temp_mail_sessions").upsert(data, on_conflict="user_id").execute()
+            return True
+        except Exception as e:
+            logging.error(f"Supabase Error save_mail_session: {e}")
+            return False
+
+    def get_mail_session(self, user_id):
+        try:
+            response = self.client.table("temp_mail_sessions").select("*").eq("user_id", user_id).execute()
+            if response.data:
+                return response.data[0]
+        except Exception as e:
+            logging.error(f"Supabase Error get_mail_session: {e}")
+        return None
+
+    def delete_mail_session(self, user_id):
+        try:
+            self.client.table("temp_mail_sessions").delete().eq("user_id", user_id).execute()
+            return True
+        except Exception as e:
+            logging.error(f"Supabase Error delete_mail_session: {e}")
+            return False
+
+    def get_all_mail_sessions(self):
+        try:
+            response = self.client.table("temp_mail_sessions").select("*").execute()
+            return response.data
+        except Exception as e:
+            logging.error(f"Supabase Error get_all_mail: {e}")
+            return []
+
+    def update_mail_last_id(self, user_id, msg_id):
+        try:
+            self.client.table("temp_mail_sessions").update({"last_msg_id": msg_id}).eq("user_id", user_id).execute()
+        except Exception as e:
+            logging.error(f"Supabase Error update_last_id: {e}")
+
 # --- MYSQL / TiDB IMPLEMENTATION ---
 class MySQLAdapter(DatabaseAdapter):
     def __init__(self, host, port, user, password, db_name, ssl_ca=None):
-        import mysql.connector
-        self.config = {
+        import mysql.connector.pooling
+        self.db_config = {
             'host': host,
             'port': port,
             'user': user,
@@ -235,14 +321,26 @@ class MySQLAdapter(DatabaseAdapter):
             'autocommit': True
         }
         if ssl_ca and os.path.exists(ssl_ca):
-            self.config['ssl_ca'] = ssl_ca
+            self.db_config['ssl_ca'] = ssl_ca
             
-        logging.info("✅ Menggunakan Database: TiDB (MySQL)")
+        # Initialize Connection Pool
+        try:
+            self.pool = mysql.connector.pooling.MySQLConnectionPool(
+                pool_name="bot_pool",
+                pool_size=5, # Keep it small for serverless
+                pool_reset_session=True,
+                **self.db_config
+            )
+            logging.info("✅ Menggunakan Database: TiDB (MySQL with Pooling)")
+        except Exception as e:
+            logging.error(f"❌ Failed creating DB Pool: {e}")
+            raise e
+
         self.initialize_tables()
 
     def get_connection(self):
-        import mysql.connector
-        return mysql.connector.connect(**self.config)
+        # Get connection from pool
+        return self.pool.get_connection()
 
     def initialize_tables(self):
         """Buat tabel jika belum ada."""
@@ -283,6 +381,14 @@ class MySQLAdapter(DatabaseAdapter):
                 content TEXT,
                 updated_at DATETIME,
                 UNIQUE KEY unique_note (user_id, title)
+            )""",
+            """CREATE TABLE IF NOT EXISTS temp_mail_sessions (
+                user_id BIGINT PRIMARY KEY,
+                email VARCHAR(255),
+                password VARCHAR(255),
+                token VARCHAR(500),
+                last_msg_id VARCHAR(100),
+                created_at DATETIME
             )"""
         ]
         try:
@@ -290,6 +396,12 @@ class MySQLAdapter(DatabaseAdapter):
             cursor = conn.cursor()
             for q in queries:
                 cursor.execute(q)
+            
+            # Ensure last_msg_id exists (migration for existing table)
+            try:
+                cursor.execute("ALTER TABLE temp_mail_sessions ADD COLUMN last_msg_id VARCHAR(100)")
+            except: pass 
+            
             conn.close()
         except Exception as e:
             logging.error(f"TiDB Init Error: {e}")
@@ -338,7 +450,6 @@ class MySQLAdapter(DatabaseAdapter):
             cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
             data = cursor.fetchone()
             conn.close()
-            # Convert datetime to ISO string for compatibility
             if data and 'last_seen' in data and data['last_seen']:
                  data['last_seen'] = data['last_seen'].isoformat()
         except Exception as e:
@@ -346,6 +457,10 @@ class MySQLAdapter(DatabaseAdapter):
         return data
 
     def get_admins(self, owner_id):
+        # Cache Check
+        if time.time() < _CACHE_ADMINS["expiry"]:
+            return _CACHE_ADMINS["data"]
+
         admins = {int(owner_id)}
         try:
             conn = self.get_connection()
@@ -354,6 +469,10 @@ class MySQLAdapter(DatabaseAdapter):
             for row in cursor.fetchall():
                 admins.add(int(row[0]))
             conn.close()
+            
+            # Cache Update
+            _CACHE_ADMINS["data"] = admins
+            _CACHE_ADMINS["expiry"] = time.time() + CACHE_TTL
         except Exception as e:
             logging.error(f"MySQL Error get_admins: {e}")
         return admins
@@ -366,6 +485,7 @@ class MySQLAdapter(DatabaseAdapter):
             cursor.execute(sql, (user_id, username))
             affected = cursor.rowcount
             conn.close()
+            invalidate_cache("admins") # Reset Cache
             return affected > 0
         except Exception as e:
             logging.error(f"MySQL Error add_admin: {e}")
@@ -377,12 +497,17 @@ class MySQLAdapter(DatabaseAdapter):
             cursor = conn.cursor()
             cursor.execute("DELETE FROM admins WHERE user_id = %s", (user_id,))
             conn.close()
+            invalidate_cache("admins") # Reset Cache
             return True
         except Exception as e:
             logging.error(f"MySQL Error remove_admin: {e}")
             return False
 
     def get_banned(self):
+        # Cache Check
+        if time.time() < _CACHE_BANNED["expiry"]:
+            return _CACHE_BANNED["data"]
+            
         banned = set()
         try:
             conn = self.get_connection()
@@ -391,6 +516,10 @@ class MySQLAdapter(DatabaseAdapter):
             for row in cursor.fetchall():
                 banned.add(str(row[0]))
             conn.close()
+            
+            # Cache Update
+            _CACHE_BANNED["data"] = banned
+            _CACHE_BANNED["expiry"] = time.time() + CACHE_TTL
         except Exception as e:
             logging.error(f"MySQL Error get_banned: {e}")
         return banned
@@ -404,6 +533,7 @@ class MySQLAdapter(DatabaseAdapter):
                      ON DUPLICATE KEY UPDATE reason=%s, banned_at=NOW()"""
             cursor.execute(sql, (user_id, username, reason, reason))
             conn.close()
+            invalidate_cache("banned") # Reset Cache
             return True
         except Exception as e:
             logging.error(f"MySQL Error ban_user: {e}")
@@ -415,6 +545,7 @@ class MySQLAdapter(DatabaseAdapter):
             cursor = conn.cursor()
             cursor.execute("DELETE FROM banned WHERE user_id = %s", (user_id,))
             conn.close()
+            invalidate_cache("banned") # Reset Cache
             return True
         except Exception as e:
             logging.error(f"MySQL Error unban_user: {e}")
@@ -424,7 +555,6 @@ class MySQLAdapter(DatabaseAdapter):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-            # Serialize JSON
             val_str = json.dumps(state_data)
             sql = "INSERT INTO bot_state (`key`, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s"
             cursor.execute(sql, ("bot_config", val_str, val_str))
@@ -440,7 +570,6 @@ class MySQLAdapter(DatabaseAdapter):
             cursor.execute("SELECT value FROM bot_state WHERE `key` = 'bot_config'")
             row = cursor.fetchone()
             if row:
-                # TiDB might return str or dict depending on driver version with JSON support
                 val = row[0]
                 if isinstance(val, str):
                     state = json.loads(val)
@@ -480,7 +609,6 @@ class MySQLAdapter(DatabaseAdapter):
         try:
             conn = self.get_connection()
             cursor = conn.cursor()
-            # Wrapper same as Supabase
             val_json = json.dumps({"text": value})
             sql = "INSERT INTO bot_state (`key`, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s"
             cursor.execute(sql, (key, val_json, val_json))
@@ -543,6 +671,64 @@ class MySQLAdapter(DatabaseAdapter):
         except Exception as e:
             logging.error(f"MySQL Error delete_note: {e}")
             return False
+
+    def save_mail_session(self, user_id, email, password, token):
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            sql = """INSERT INTO temp_mail_sessions (user_id, email, password, token, created_at) 
+                     VALUES (%s, %s, %s, %s, NOW())
+                     ON DUPLICATE KEY UPDATE email=%s, password=%s, token=%s, created_at=NOW()"""
+            cursor.execute(sql, (user_id, email, password, token, email, password, token))
+            conn.close()
+            return True
+        except Exception as e:
+            logging.error(f"MySQL Error save_mail_session: {e}")
+            return False
+
+    def get_mail_session(self, user_id):
+        data = None
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT * FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
+            data = cursor.fetchone()
+            conn.close()
+        except Exception as e:
+            logging.error(f"MySQL Error get_mail_session: {e}")
+        return data
+
+    def delete_mail_session(self, user_id):
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
+            conn.close()
+            return True
+        except Exception as e:
+            logging.error(f"MySQL Error delete_mail_session: {e}")
+            return False
+
+    def get_all_mail_sessions(self):
+        data = []
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor(dictionary=True)
+            cursor.execute("SELECT * FROM temp_mail_sessions")
+            data = cursor.fetchall()
+            conn.close()
+        except Exception as e:
+            logging.error(f"MySQL Error get_all_mail: {e}")
+        return data
+
+    def update_mail_last_id(self, user_id, msg_id):
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE temp_mail_sessions SET last_msg_id = %s WHERE user_id = %s", (msg_id, user_id))
+            conn.close()
+        except Exception as e:
+            logging.error(f"MySQL Error update_last_id: {e}")
 
 # --- UTILS & INITIALIZATION ---
 
@@ -644,3 +830,18 @@ def db_get_note_content(user_id, title):
 
 def db_delete_note(user_id, title):
     return adapter.delete_note(user_id, title)
+
+def db_save_mail_session(user_id, email, password, token):
+    return adapter.save_mail_session(user_id, email, password, token)
+
+def db_get_mail_session(user_id):
+    return adapter.get_mail_session(user_id)
+
+def db_delete_mail_session(user_id):
+    return adapter.delete_mail_session(user_id)
+
+def db_get_all_mail_sessions():
+    return adapter.get_all_mail_sessions()
+
+def db_update_mail_last_id(user_id, msg_id):
+    return adapter.update_mail_last_id(user_id, msg_id)
