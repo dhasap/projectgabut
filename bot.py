@@ -12,11 +12,38 @@ from datetime import datetime
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.utils.exceptions import Throttled
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
+from aiogram.dispatcher import FSMContext
+from aiogram.dispatcher.filters.state import State, StatesGroup
+
+class NoteState(StatesGroup):
+    title = State()
+    content = State()
+
+class MailCustomState(StatesGroup):
+    username = State()
+    password = State()
+
+# --- DYNAMIC MENU STATES ---
+class MenuReplyState(StatesGroup):
+    waiting_label = State()
+    waiting_row = State()
+    waiting_response = State()
+    waiting_inline_choice = State()
+    waiting_inline_conf = State()
+
+class MenuInlineState(StatesGroup):
+    waiting_key = State()
+    waiting_title = State()
+    waiting_content = State()
+    waiting_buttons = State()
+
 from bs4 import BeautifulSoup as bs
 from faker import Faker
 import checker
 import iban
 import names_db
+import identity
+import menu_manager
 from checker import is_card_valid, local_chk_gate
 
 
@@ -203,6 +230,7 @@ def unban_user(user_id):
 
 # TEMP MAIL STORAGE
 USER_MAILS = {} # Current Active Session
+LAST_GEN_ID = {} # Last Generated Fake ID (for Save to Note feature)
 SAVED_MAILS = {} # History List: {user_id: [ {email, password, token}, ... ]}
 
 def save_email_session(user_id, email, password, token):
@@ -220,16 +248,6 @@ def save_email_session(user_id, email, password, token):
     # Batasi maksimal 10 akun terakhir
     if len(SAVED_MAILS[user_id]) > 10:
         SAVED_MAILS[user_id].pop()
-
-# FAKER LOCALES
-FAKER_LOCALES = {
-    'us': 'en_US', 'id': 'id_ID', 'jp': 'ja_JP', 'kr': 'ko_KR',
-    'ru': 'ru_RU', 'br': 'pt_BR', 'cn': 'zh_CN', 'de': 'de_DE',
-    'fr': 'fr_FR', 'it': 'it_IT', 'es': 'es_ES', 'in': 'en_IN',
-    'uk': 'en_GB', 'ca': 'en_CA', 'au': 'en_AU', 'nl': 'nl_NL',
-    'tr': 'tr_TR', 'pl': 'pl_PL', 'ua': 'uk_UA', 'my': 'ms_MY',
-    'vn': 'vi_VN', 'th': 'th_TH', 'ph': 'tl_PH', 'sg': 'en_SG'
-}
 
 # BOT INFO
 loop = asyncio.get_event_loop()
@@ -320,37 +338,18 @@ def menu_keyboard():
 
 
 def get_reply_keyboard(is_admin=False):
-    """Membuat custom reply keyboard untuk akses cepat."""
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=3)
-    
-    # Row 1: Card Tools (Utilitas Kartu)
-    markup.row("💳 BIN Check", "🎲 Rnd BIN", "✅ Check CC")
-    
-    # Row 2: Generator & Identity (Buat Data)
-    markup.row("👤 Fake ID", "🏦 Fake IBAN", "⚙️ CC Gen")
-    
-    # Row 3: Mail Management & Notes (Kelola Email)
-    # Menambahkan tombol utama Temp Mail agar konsisten
-    markup.row("📧 Temp Mail", "📝 Notes")
-    
-    # Row 4: System (Info & Bantuan)
-    if is_admin:
-        markup.row("👤 Info User", "❓ Help & Menu")
-        markup.add("🔐 Admin Panel")
-    else:
-        markup.row("👤 Info User", "❓ Help & Menu")
-    
-    return markup
+    """Membuat custom reply keyboard dari config JSON."""
+    return menu_manager.get_reply_keyboard_markup(is_admin)
 
 def get_admin_keyboard():
     """Keyboard khusus Admin."""
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.row("📊 Stats", "📢 Broadcast")
     markup.row("⛔ User Control", "🎛️ Features")
+    markup.row("🎹 Menu Editor", "✏️ Edit Texts") # Added Menu Editor
     markup.row("👁️ Spy Mode", "🚧 Maint. Mode")
-    markup.row("✏️ Edit Texts", "📜 Admin Logs")
-    markup.row("🏥 System Health", "👥 Admins")
-    markup.add("🔙 Exit Admin")
+    markup.row("📜 Admin Logs", "🏥 System Health")
+    markup.row("👥 Admins", "🔙 Exit Admin")
     return markup
 
 def log_admin_action(user, action, details):
@@ -389,7 +388,7 @@ async def process_gen_callback(callback_query: types.CallbackQuery):
     await gen_cc(fake_message)
 
 
-@dp.callback_query_handler(lambda c: c.data in ['m_bin', 'm_chk', 'm_info', 'm_main', 'm_gen', 'm_mail', 'm_fake', 'm_rnd', 'm_iban', 'm_notes'])
+@dp.callback_query_handler(lambda c: c.data in ['m_bin', 'm_chk', 'm_info', 'm_main', 'm_gen', 'm_mail', 'm_fake', 'm_rnd', 'm_iban'])
 async def process_callback_button(callback_query: types.CallbackQuery):
     code = callback_query.data
     user = callback_query.from_user
@@ -492,17 +491,7 @@ Contoh:
             reply_markup=kb,
             parse_mode=types.ParseMode.HTML
         )
-    elif code == 'm_notes':
-        await bot.send_message(
-            user.id,
-            "<b>📝 SECURE NOTES</b>\n"
-            "Simpan data penting dengan aman (Terenkripsi).\n\n"
-            "<b>Daftar Perintah:</b>\n"
-            "• <code>/note add [judul] [isi]</code>\n"
-            "• <code>/note list</code>\n"
-            "• <code>/note get [judul]</code>\n"
-            "• <code>/note del [judul]</code>"
-        )
+
     elif code == 'm_info':
         is_owner_val = await is_owner(user.id)
         await bot.send_message(
@@ -672,32 +661,182 @@ async def helpstr(message: types.Message):
     await message.answer("⌨️", reply_markup=reply_kb)
 
 
+# --- NOTES FEATURE (INLINE INTERFACE) ---
+
+async def show_notes_menu(chat_id, message_id=None):
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("➕ Buat Catatan", callback_data="note_add"),
+        types.InlineKeyboardButton("📋 Lihat Catatan", callback_data="note_list")
+    )
+    
+    text = (
+        "<b>📝 SECURE NOTES</b>\n"
+        "Simpan catatan penting Anda dengan aman.\n"
+        "Silakan pilih menu di bawah:"
+    )
+    
+    if message_id:
+        try:
+            await bot.edit_message_text(text, chat_id, message_id, reply_markup=kb)
+        except:
+            await bot.send_message(chat_id, text, reply_markup=kb)
+    else:
+        await bot.send_message(chat_id, text, reply_markup=kb)
+
+@dp.callback_query_handler(lambda c: c.data in ['m_notes', 'note_main'], state="*")
+async def cb_notes_main(call: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    await show_notes_menu(call.message.chat.id, call.message.message_id)
+    await call.answer()
+
+@dp.callback_query_handler(text="note_list", state="*")
+async def cb_notes_list(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    notes = db.db_get_notes_list(user_id)
+    
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    text = ""
+    if not notes:
+        kb.add(types.InlineKeyboardButton("➕ Buat Catatan Baru", callback_data="note_add"))
+        text = "📭 <b>Belum ada catatan.</b>"
+    else:
+        text = "<b>📂 DAFTAR CATATAN ANDA</b>\nPilih catatan untuk membuka:"
+        for n in notes:
+            title = n['title']
+            cb_data = f"note_read:{title}"
+            # Safety check for length
+            if len(cb_data) > 64:
+                 pass
+            kb.add(types.InlineKeyboardButton(f"📄 {title}", callback_data=cb_data))
+        
+        kb.add(types.InlineKeyboardButton("➕ Tambah", callback_data="note_add"))
+    
+    kb.add(types.InlineKeyboardButton("🔙 Kembali", callback_data="note_main"))
+    
+    await bot.edit_message_text(
+        text,
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=kb
+    )
+    await call.answer()
+
+@dp.callback_query_handler(text="note_add", state="*")
+async def cb_notes_add(call: types.CallbackQuery):
+    await NoteState.title.set()
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 Batal", callback_data="note_main"))
+    
+    await bot.edit_message_text(
+        "<b>➕ BUAT CATATAN BARU</b>\n\nSilakan kirim <b>Judul Catatan</b> yang ingin dibuat.",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=kb
+    )
+    await call.answer()
+
+@dp.message_handler(state=NoteState.title)
+async def state_note_title(message: types.Message, state: FSMContext):
+    title = message.text.strip()
+    if len(title) > 30:
+        return await message.reply("⚠️ <b>Judul terlalu panjang!</b>\nMaksimal 30 karakter. Silakan kirim ulang.")
+    
+    # Check if title exists
+    if db.db_get_note_content(message.from_user.id, title):
+         return await message.reply("⚠️ <b>Judul sudah ada!</b>\nSilakan gunakan judul lain.")
+
+    await state.update_data(title=title)
+    await NoteState.next()
+    await message.reply(
+        f"<b>Judul:</b> {title}\n\nSekarang kirim <b>Isi Catatan</b> tersebut."
+    )
+
+@dp.message_handler(state=NoteState.content)
+async def state_note_content(message: types.Message, state: FSMContext):
+    content = message.text.strip()
+    data = await state.get_data()
+    title = data['title']
+    
+    if db.db_save_note(message.from_user.id, title, content):
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("📂 Lihat Daftar", callback_data="note_list"))
+        await message.reply(
+            f"✅ Catatan <b>{title}</b> berhasil disimpan!",
+            reply_markup=kb
+        )
+    else:
+        await message.reply("⚠️ Gagal menyimpan catatan.")
+        
+    await state.finish()
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('note_read:'), state="*")
+async def cb_notes_read(call: types.CallbackQuery):
+    try:
+        title = call.data.split(':', 1)[1]
+    except IndexError:
+        return await call.answer("Error data.")
+
+    content = db.db_get_note_content(call.from_user.id, title)
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("🗑 Hapus", callback_data=f"note_del_ask:{title}"),
+        types.InlineKeyboardButton("🔙 Kembali", callback_data="note_list")
+    )
+    
+    if content:
+        text = (
+            f"<b>📝 {title}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<code>{content}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━"
+        )
+    else:
+        text = "⚠️ Catatan tidak ditemukan."
+        
+    await bot.edit_message_text(
+        text,
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=kb
+    )
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('note_del_ask:'), state="*")
+async def cb_notes_del_ask(call: types.CallbackQuery):
+    title = call.data.split(':', 1)[1]
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("✅ Ya, Hapus", callback_data=f"note_del:{title}"),
+        types.InlineKeyboardButton("❌ Batal", callback_data=f"note_read:{title}")
+    )
+    
+    await bot.edit_message_text(
+        f"❓ Apakah Anda yakin ingin menghapus catatan <b>{title}</b>?",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=kb
+    )
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('note_del:'), state="*")
+async def cb_notes_del(call: types.CallbackQuery):
+    title = call.data.split(':', 1)[1]
+    if db.db_delete_note(call.from_user.id, title):
+        await call.answer("Catatan dihapus!")
+        await cb_notes_list(call)
+    else:
+        await call.answer("Gagal menghapus.", show_alert=True)
+
 @dp.message_handler(commands=['note', 'notes'], commands_prefix=PREFIX)
 async def cmd_notes(message: types.Message):
     user_id = message.from_user.id
     # Split: /note [action] [rest]
     args = message.text.split(maxsplit=2)
     
-    help_msg = (
-        "<b>📝 SECURE NOTES (Catatan Aman)</b>\n"
-        "Simpan data sensitif Anda dengan enkripsi end-to-end.\n\n"
-        "<b>Daftar Perintah:</b>\n"
-        "• <code>/note add [judul] | [isi]</code>\n"
-        "  <i>(Simpan catatan. Gunakan simbol '|' untuk memisahkan judul & isi)</i>\n"
-        "• <code>/note list</code>\n"
-        "  <i>(Lihat semua daftar judul catatan Anda)</i>\n"
-        "• <code>/note get [judul]</code>\n"
-        "  <i>(Baca isi catatan berdasarkan judul)</i>\n"
-        "• <code>/note del [judul]</code>\n"
-        "  <i>(Hapus catatan permanen)</i>\n\n"
-        "<b>Contoh (Judul Spasi):</b>\n"
-        "<code>/note add Wifi Rumah | password12345</code>\n"
-        "<b>Contoh (Satu Kata):</b>\n"
-        "<code>/note add Facebook email@gmail.com</code>"
-    )
-    
     if len(args) < 2:
-        return await message.reply(help_msg)
+        return await show_notes_menu(message.chat.id)
         
     action = args[1].lower()
     
@@ -1242,6 +1381,36 @@ async def process_admin_keyboard(message: types.Message):
             "• <code>/sethelp [pesan]</code>"
         )
 
+    elif text == "🎹 Menu Editor":
+        kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+        kb.row("Reply Editor", "Inline Editor")
+        kb.add("🔙 Back to Admin")
+        
+        guide_msg = (
+            "<b>🎹 PANDUAN LENGKAP MENU EDITOR</b>\n"
+            "Kelola tombol dan pesan bot tanpa coding. Ikuti panduan di bawah:\n\n"
+            "<b>1️⃣ REPLY EDITOR (Menu Utama)</b>\n"
+            "Mengubah tombol yang muncul di keyboard bawah user.\n"
+            "• <b>Langkah:</b> Klik Add -> Isi Nama -> Isi Baris (1-5) -> Isi Pesan.\n"
+            "• <b>Variabel:</b> Gunakan <code>{first_name}</code> untuk panggil nama user.\n"
+            "• <b>Fitur Lanjut:</b> Setelah isi pesan, Anda bisa pilih <b>YA</b> untuk tambah tombol Inline di bawah pesan tersebut.\n\n"
+            "<b>2️⃣ INLINE EDITOR (Bank Pesan)</b>\n"
+            "Tempat menyimpan pesan 'template' (Pengumuman/Promo/Info).\n"
+            "• <b>Langkah:</b> Klik Create -> Isi <b>KODE UNIK</b> (contoh: <code>info_vip</code>) -> Isi Pesan.\n"
+            "• <b>Cara Panggil:</b> Ketik <code>/show info_vip</code> di chat.\n\n"
+            "<b>3️⃣ FORMAT TOMBOL INLINE</b>\n"
+            "Saat diminta memasukkan format tombol, gunakan aturan ini:\n"
+            "• <b>Link Web:</b> <code>Nama|https://link.com</code>\n"
+            "• <b>Pesan Internal:</b> <code>Nama|msg:KODE</code> (Membuka pesan dari Inline Editor)\n"
+            "• <b>Callback:</b> <code>Nama|callback:data</code> (Untuk dev lanjut)\n\n"
+            "<b>📝 CONTOH INPUT TOMBOL:</b>\n"
+            "<i>(Satu baris pakai koma, baris baru pakai Enter)</i>\n"
+            "<code>Join Grup|https://t.me/azkura, Web|https://google.com</code>\n"
+            "<code>Tentang Bot|msg:about_us</code>\n\n"
+            "💡 <b>Tips:</b> Buatlah konten di <b>Inline Editor</b> terlebih dahulu jika ingin membuat tombol navigasi (Sub-Menu)."
+        )
+        await message.reply(guide_msg, reply_markup=kb)
+
     elif text == "📜 Admin Logs":
         logs = db.db_get_activity_logs(limit=15)
         if not logs:
@@ -1264,29 +1433,381 @@ async def process_admin_keyboard(message: types.Message):
     elif text == "🔙 Exit Admin":
         await message.reply("Kembali ke menu utama.", reply_markup=get_reply_keyboard(is_admin=True))
 
-@dp.message_handler(lambda message: message.text in ["💳 BIN Check", "🎲 Rnd BIN", "✅ Check CC", "👤 Fake ID", "📧 Temp Mail", "⚙️ CC Gen", "📩 Cek Inbox", "🔄 Ganti Akun", "👤 Info User", "❓ Help & Menu", "🔐 Admin Panel", "🏦 Fake IBAN", "📝 Notes"])
-async def process_reply_keyboard(message: types.Message):
-    """Menangani input dari Reply Keyboard."""
+# --- MENU EDITOR HANDLERS ---
+
+@dp.message_handler(lambda m: m.text == "🔙 Back to Admin", state="*")
+async def back_to_admin_handler(message: types.Message, state: FSMContext):
+    await state.finish()
+    await admin_panel(message)
+
+@dp.message_handler(lambda m: m.text == "Reply Editor", state="*")
+async def reply_editor_menu(message: types.Message):
+    if message.from_user.id not in get_admins(): return
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("➕ Add Button", callback_data="reply_add"),
+        types.InlineKeyboardButton("🗑 Delete Button", callback_data="reply_del_list")
+    )
+    
+    # Show current layout
+    config = menu_manager.load_config()
+    preview = "<b>CURRENT REPLY MENU LAYOUT:</b>\n"
+    sorted_btns = sorted(config.get('reply_menu', []), key=lambda x: x.get('row', 99))
+    
+    for btn in sorted_btns:
+        preview += f"[R{btn.get('row', '?')}] <b>{btn['label']}</b> ({btn.get('type','?')})\n"
+        
+    await message.reply(preview, reply_markup=kb, parse_mode=types.ParseMode.HTML)
+
+@dp.callback_query_handler(text="reply_add", state="*")
+async def reply_add_start(call: types.CallbackQuery):
+    await MenuReplyState.waiting_label.set()
+    await call.message.reply("<b>➕ ADD BUTTON</b>\n\nSilakan kirim <b>Label/Nama Tombol</b> yang diinginkan.\nContoh: <code>Info Donasi</code>")
+    await call.answer()
+
+@dp.message_handler(state=MenuReplyState.waiting_label)
+async def reply_add_label(message: types.Message, state: FSMContext):
+    label = message.text.strip()
+    if menu_manager.get_action_by_label(label):
+        return await message.reply("⚠️ Tombol dengan nama tersebut sudah ada. Gunakan nama lain.")
+        
+    await state.update_data(label=label)
+    await MenuReplyState.next()
+    await message.reply(f"<b>Label:</b> {label}\n\nSekarang kirim <b>Nomor Baris (Row)</b>.\n1-4 (Standard), 5+ (Bawah).")
+
+@dp.message_handler(state=MenuReplyState.waiting_row)
+async def reply_add_row(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        return await message.reply("⚠️ Harap kirim angka.")
+        
+    row = int(message.text)
+    await state.update_data(row=row)
+    await MenuReplyState.next()
+    await message.reply("Terakhir, kirim <b>Pesan Balasan (Response)</b> ketika tombol diklik.\nBisa pakai HTML dan {first_name}.")
+
+@dp.message_handler(state=MenuReplyState.waiting_response)
+async def reply_add_response(message: types.Message, state: FSMContext):
+    response = message.text 
+    await state.update_data(response=response)
+    await MenuReplyState.next()
+    
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    kb.row("Ya", "Tidak")
+    
+    await message.reply(
+        "Apakah Anda ingin menambahkan <b>Tombol Inline</b> (Link/URL) di bawah pesan balasan ini?",
+        reply_markup=kb
+    )
+
+@dp.message_handler(state=MenuReplyState.waiting_inline_choice)
+async def reply_add_inline_choice(message: types.Message, state: FSMContext):
+    choice = message.text.lower()
+    
+    if choice == "tidak":
+        # Simpan tanpa tombol inline
+        data = await state.get_data()
+        if menu_manager.add_reply_button(data['label'], data['response'], data['row'], inline_buttons=[]):
+            await message.reply(f"✅ Tombol <b>{data['label']}</b> berhasil ditambahkan (Tanpa Inline)!", reply_markup=types.ReplyKeyboardRemove())
+        else:
+            await message.reply("⚠️ Gagal menyimpan.", reply_markup=types.ReplyKeyboardRemove())
+        
+        await state.finish()
+        # Refresh UI
+        fake_msg = message
+        fake_msg.text = "Reply Editor"
+        await reply_editor_menu(fake_msg)
+        
+    elif choice == "ya":
+        await MenuReplyState.next()
+        await message.reply(
+            "Kirim <b>TOMBOL</b> dengan format:\n"
+            "<code>Label|Link</code> atau <code>Label|callback:data</code>\n"
+            "Pisahkan tombol sebaris dengan koma (,).\n"
+            "Pisahkan baris baru dengan Enter.\n\n"
+            "Contoh:\n"
+            "<code>Google|https://google.com, Menu|callback:m_main</code>",
+            reply_markup=types.ReplyKeyboardRemove()
+        )
+    else:
+        await message.reply("⚠️ Pilih Ya atau Tidak.")
+
+@dp.message_handler(state=MenuReplyState.waiting_inline_conf)
+async def reply_add_inline_conf(message: types.Message, state: FSMContext):
+    raw_lines = message.text.splitlines()
+    buttons = []
+    
+    try:
+        # Parsing Logic
+        for line in raw_lines:
+            row_btns = []
+            parts = line.split(',')
+            for part in parts:
+                if '|' in part:
+                    lbl, val = part.split('|', 1)
+                    lbl = lbl.strip()
+                    val = val.strip()
+                    
+                    btn_obj = {"text": lbl}
+                    if val.startswith('msg:'):
+                        code = val.replace('msg:', '', 1).strip()
+                        btn_obj['data'] = f"show_msg:{code}"
+                    elif val.startswith('callback:'):
+                        btn_obj['data'] = val.replace('callback:', '', 1)
+                    else:
+                        btn_obj['url'] = val
+                    row_btns.append(btn_obj)
+            if row_btns:
+                buttons.append(row_btns)
+        
+        data = await state.get_data()
+        if menu_manager.add_reply_button(data['label'], data['response'], data['row'], inline_buttons=buttons):
+            await message.reply(f"✅ Tombol <b>{data['label']}</b> berhasil ditambahkan (Dengan Inline)!")
+        else:
+            await message.reply("⚠️ Gagal menyimpan.")
+            
+    except Exception as e:
+        await message.reply(f"⚠️ Error format: {e}")
+        return # Stay in state
+        
+    await state.finish()
+    fake_msg = message
+    fake_msg.text = "Reply Editor"
+    await reply_editor_menu(fake_msg)
+
+@dp.callback_query_handler(text="reply_del_list", state="*")
+async def reply_del_list(call: types.CallbackQuery):
+    config = menu_manager.load_config()
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    
+    for btn in config.get('reply_menu', []):
+        # Only allow deleting 'text' type buttons to prevent breaking core features
+        if btn.get('type') == 'text':
+            kb.add(types.InlineKeyboardButton(f"❌ {btn['label']}", callback_data=f"rdel:{btn['label']}"))
+            
+    kb.add(types.InlineKeyboardButton("🔙 Kembali", callback_data="ignore")) # Use reply keyboard to go back
+    
+    if not kb.inline_keyboard:
+        await call.message.reply("⚠️ Tidak ada tombol Custom yang bisa dihapus.")
+    else:
+        await call.message.reply("<b>🗑 DELETE BUTTON</b>\nKlik tombol yang ingin dihapus:", reply_markup=kb)
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('rdel:'), state="*")
+async def reply_del_action(call: types.CallbackQuery):
+    label = call.data.split(':', 1)[1]
+    if menu_manager.delete_reply_button(label):
+        await call.answer(f"Tombol '{label}' dihapus.")
+        await call.message.delete() # Remove list
+    else:
+        await call.answer("Gagal menghapus.", show_alert=True)
+
+# --- INLINE EDITOR HANDLERS ---
+
+@dp.message_handler(lambda m: m.text == "Inline Editor", state="*")
+async def inline_editor_menu(message: types.Message):
+    if message.from_user.id not in get_admins(): return
+    
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("➕ Create New", callback_data="inline_add"),
+        types.InlineKeyboardButton("📝 List Saved", callback_data="inline_list")
+    )
+    
+    await message.reply(
+        "<b>anggo INLINE EDITOR</b>\n"
+        "Buat pesan custom dengan tombol URL/Callback.\n"
+        "Gunakan kode unik untuk memanggil pesan ini nanti.",
+        reply_markup=kb, parse_mode=types.ParseMode.HTML
+    )
+
+@dp.callback_query_handler(text="inline_add", state="*")
+async def inline_add_start(call: types.CallbackQuery):
+    await MenuInlineState.waiting_key.set()
+    await call.message.reply("<b>➕ NEW INLINE MESSAGE</b>\n\nKirim <b>KODE UNIK</b> (satu kata) untuk pesan ini.\nContoh: <code>promo_juni</code>")
+    await call.answer()
+
+@dp.message_handler(state=MenuInlineState.waiting_key)
+async def inline_add_key(message: types.Message, state: FSMContext):
+    key = message.text.strip().lower()
+    if ' ' in key: return await message.reply("⚠️ Kode harus satu kata tanpa spasi.")
+    
+    await state.update_data(key=key)
+    await MenuInlineState.next()
+    await message.reply("Kirim <b>JUDUL (Title)</b> pesan.")
+
+@dp.message_handler(state=MenuInlineState.waiting_title)
+async def inline_add_title(message: types.Message, state: FSMContext):
+    await state.update_data(title=message.text)
+    await MenuInlineState.next()
+    await message.reply("Kirim <b>ISI PESAN (Content)</b>. Support HTML.")
+
+@dp.message_handler(state=MenuInlineState.waiting_content)
+async def inline_add_content(message: types.Message, state: FSMContext):
+    await state.update_data(content=message.text)
+    await MenuInlineState.next()
+    await message.reply(
+        "Kirim <b>TOMBOL</b> dengan format:\n"
+        "<code>Label|Link</code> atau <code>Label|callback:data</code>\n"
+        "Pisahkan tombol sebaris dengan koma (,).\n"
+        "Pisahkan baris baru dengan Enter.\n\n"
+        "Contoh:\n"
+        "<code>Google|https://google.com, Menu|callback:m_main</code>\n"
+        "<code>Support|https://t.me/admin</code>"
+    )
+
+@dp.message_handler(state=MenuInlineState.waiting_buttons)
+async def inline_add_buttons(message: types.Message, state: FSMContext):
+    raw_lines = message.text.splitlines()
+    buttons = []
+    
+    try:
+        for line in raw_lines:
+            row_btns = []
+            parts = line.split(',')
+            for part in parts:
+                if '|' in part:
+                    lbl, val = part.split('|', 1)
+                    lbl = lbl.strip()
+                    val = val.strip()
+                    
+                    btn_obj = {"text": lbl}
+                    if val.startswith('msg:'):
+                        code = val.replace('msg:', '', 1).strip()
+                        btn_obj['data'] = f"show_msg:{code}"
+                    elif val.startswith('callback:'):
+                        btn_obj['data'] = val.replace('callback:', '', 1)
+                    else:
+                        btn_obj['url'] = val
+                    row_btns.append(btn_obj)
+            if row_btns:
+                buttons.append(row_btns)
+                
+        data = await state.get_data()
+        menu_manager.save_inline_message(data['key'], data['title'], data['content'], buttons)
+        
+        await message.reply(
+            f"✅ Pesan Inline <b>{data['key']}</b> berhasil disimpan!\n"
+            f"Gunakan perintah: <code>/show {data['key']}</code> untuk menampilkannya."
+        )
+    except Exception as e:
+        await message.reply(f"⚠️ Error format: {e}")
+        
+    await state.finish()
+
+@dp.message_handler(commands=['show'], commands_prefix=PREFIX)
+async def show_inline_msg(message: types.Message):
+    key = message.get_args()
+    if not key: return
+    
+    data = menu_manager.get_inline_message(key)
+    if not data: return await message.reply("⚠️ Pesan tidak ditemukan.")
+    
+    # Construct Keyboard
+    kb = types.InlineKeyboardMarkup()
+    for row in data['buttons']:
+        btns_obj = []
+        for b in row:
+            if 'url' in b:
+                btns_obj.append(types.InlineKeyboardButton(b['text'], url=b['url']))
+            elif 'data' in b:
+                btns_obj.append(types.InlineKeyboardButton(b['text'], callback_data=b['data']))
+        kb.row(*btns_obj)
+        
+    text = f"<b>{data['title']}</b>\n\n{data['content']}"
+    await message.reply(text, reply_markup=kb, parse_mode=types.ParseMode.HTML)
+
+@dp.callback_query_handler(text="inline_list", state="*")
+async def inline_list_view(call: types.CallbackQuery):
+    keys = menu_manager.list_inline_messages()
+    if not keys:
+        return await call.answer("Belum ada pesan tersimpan.", show_alert=True)
+        
+    text = "<b>📝 SAVED INLINE MESSAGES</b>\n"
+    for k in keys:
+        text += f"• <code>/show {k}</code>\n"
+        
+    await call.message.reply(text)
+    await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('show_msg:'))
+async def show_linked_message(call: types.CallbackQuery):
+    key = call.data.split(':', 1)[1]
+    data = menu_manager.get_inline_message(key)
+    
+    if not data:
+        return await call.answer("⚠️ Pesan tidak ditemukan/dihapus.", show_alert=True)
+        
+    # Construct Keyboard
+    kb = types.InlineKeyboardMarkup()
+    for row in data['buttons']:
+        btns_obj = []
+        for b in row:
+            if 'url' in b:
+                btns_obj.append(types.InlineKeyboardButton(b['text'], url=b['url']))
+            elif 'data' in b:
+                btns_obj.append(types.InlineKeyboardButton(b['text'], callback_data=b['data']))
+        kb.row(*btns_obj)
+        
+    text = f"<b>{data['title']}</b>\n\n{data['content']}"
+    
+    # Attempt to edit message for seamless navigation
+    try:
+        await call.message.edit_text(text, reply_markup=kb, parse_mode=types.ParseMode.HTML, disable_web_page_preview=True)
+    except:
+        await call.message.answer(text, reply_markup=kb, parse_mode=types.ParseMode.HTML, disable_web_page_preview=True)
+        
+    await call.answer()
+
+
+@dp.message_handler(lambda message: menu_manager.get_action_by_label(message.text) is not None)
+async def process_dynamic_reply_button(message: types.Message):
+    """Handler dinamis untuk tombol Reply Keyboard."""
     text = message.text
+    btn_data = menu_manager.get_action_by_label(text)
     
-    # Map text to feature code
-    feature_map = {
-        "💳 BIN Check": "bin", "🎲 Rnd BIN": "rnd", "✅ Check CC": "chk",
-        "👤 Fake ID": "fake", "📧 Temp Mail": "mail", "⚙️ CC Gen": "gen",
-        "📩 Cek Inbox": "mail", "🔄 Ganti Akun": "mail",
-        "🏦 Fake IBAN": "iban", "📝 Notes": "note"
-    }
+    if not btn_data:
+        return # Should not happen due to filter
+        
+    b_type = btn_data.get('type', 'text')
     
-    code = feature_map.get(text)
-    if code and code in BOT_STATE["disabled_features"]:
+    # 1. Handle Text Response (Custom Buttons)
+    if b_type == 'text':
+        response = btn_data.get('response', 'No response set.')
+        # Support variable replacement
+        response = response.replace('{first_name}', message.from_user.first_name or "")
+        response = response.replace('{username}', message.from_user.username or "")
+        response = response.replace('{id}', str(message.from_user.id))
+        
+        # Handle Inline Buttons if any
+        kb = None
+        inline_data = btn_data.get('inline_buttons')
+        if inline_data:
+            kb = types.InlineKeyboardMarkup()
+            for row in inline_data:
+                btns_obj = []
+                for b in row:
+                    if 'url' in b:
+                        btns_obj.append(types.InlineKeyboardButton(b['text'], url=b['url']))
+                    elif 'data' in b:
+                        btns_obj.append(types.InlineKeyboardButton(b['text'], callback_data=b['data']))
+                if btns_obj:
+                    kb.row(*btns_obj)
+        
+        await message.reply(response, reply_markup=kb, parse_mode=types.ParseMode.HTML, disable_web_page_preview=True)
+        return
+
+    # 2. Handle Core Actions (Built-in Features)
+    action = btn_data.get('action')
+    
+    # Check Disabled Features
+    if action in BOT_STATE["disabled_features"]:
         return await message.reply("⚠️ <b>Fitur ini sedang dimatikan sementara oleh Admin.</b>")
 
-    if text == "🔐 Admin Panel":
-        # Call admin panel handler
+    if action == 'admin':
         await admin_panel(message)
-        return
         
-    if text == "💳 BIN Check":
+    elif action == 'bin':
         await message.reply(
             "<b>💳 BIN LOOKUP & INFO</b>\n"
             "Fitur untuk mengecek detail informasi Bank Identification Number (BIN).\n\n"
@@ -1299,15 +1820,14 @@ async def process_reply_keyboard(message: types.Message):
             "<code>/bin 451234</code>\n\n"
             "<i>Tips: Masukkan 6 digit pertama kartu.</i>"
         )
-    elif text == "🎲 Rnd BIN":
+    elif action == 'rnd':
         await rnd_bin(message)
-    elif text == "📝 Notes":
-        # Call cmd_notes handler with a dummy message to show help
-        # Construct fake message with text "/note"
+    elif action == 'note':
+        # Fake command call
         fake_msg = message
         fake_msg.text = "/note"
         await cmd_notes(fake_msg)
-    elif text == "✅ Check CC":
+    elif action == 'chk':
         await message.reply(
             "<b>✅ LIVE CC CHECKER</b>\n"
             "Validasi kartu kredit/debit secara akurat (Auth/Charge).\n\n"
@@ -1320,8 +1840,7 @@ async def process_reply_keyboard(message: types.Message):
             "2. <b>Massal:</b> Reply file/pesan list kartu dengan <code>/chk</code>\n\n"
             "<i>Format: 0000000000000000|01|25|000</i>"
         )
-    elif text == "🏦 Fake IBAN":
-         # Send new message with IBAN menu
+    elif action == 'iban':
          kb = types.InlineKeyboardMarkup(row_width=3)
          countries = list(iban.FAKEIBAN_COUNTRIES.items())
          btns = []
@@ -1333,10 +1852,9 @@ async def process_reply_keyboard(message: types.Message):
              label = f"{flag} {c_code.upper()}"
              btns.append(types.InlineKeyboardButton(label, callback_data=f"iban_gen_{c_code}"))
          kb.add(*btns)
-         
          await message.reply("<b>🏦 FAKE IBAN GENERATOR</b>\nPilih negara:", reply_markup=kb)
-    elif text == "👤 Fake ID":
-        # Create Country Keyboard
+         
+    elif action == 'fake':
         kb = types.InlineKeyboardMarkup(row_width=4)
         countries = [
             ("🇺🇸 US", "us"), ("🇮🇩 ID", "id"), ("🇯🇵 JP", "jp"), ("🇰🇷 KR", "kr"),
@@ -1346,13 +1864,11 @@ async def process_reply_keyboard(message: types.Message):
             ("🇳🇱 NL", "nl"), ("🇹🇷 TR", "tr"), ("🇵🇱 PL", "pl"), ("🇺🇦 UA", "ua"),
             ("🇲🇾 MY", "my"), ("🇻🇳 VN", "vn"), ("🇹🇭 TH", "th"), ("🇵🇭 PH", "ph")
         ]
-        
         btns = [types.InlineKeyboardButton(name, callback_data=f"fake_{code}") for name, code in countries]
         kb.add(*btns)
-        
         await message.reply("<b>👤 FAKE ID GENERATOR</b>\nPilih negara target:", reply_markup=kb)
-    elif text == "📧 Temp Mail":
-        # Show Menu with Enhanced Inline Keyboard
+        
+    elif action == 'mail':
         kb = types.InlineKeyboardMarkup(row_width=2)
         kb.row(
             types.InlineKeyboardButton("🎲 Buat Random", callback_data="m_mail_create"),
@@ -1374,7 +1890,8 @@ async def process_reply_keyboard(message: types.Message):
             "<i>Silakan pilih menu operasi di bawah ini:</i>",
             reply_markup=kb
         )
-    elif text == "⚙️ CC Gen":
+        
+    elif action == 'gen':
         await message.reply(
             "<b>⚙️ VCC GENERATOR PRO</b>\n"
             "Buat nomor kartu valid (Luhn Algorithm) untuk keperluan testing.\n\n"
@@ -1389,35 +1906,9 @@ async def process_reply_keyboard(message: types.Message):
             "• <b>Massal:</b> <code>/gen 454141 50</code> (Jumlah)\n\n"
             "<i>Contoh: /gen us 20</i>"
         )
-    elif text == "📩 Cek Inbox":
-        # Direct check for active session
-        user_id = message.from_user.id
-        if user_id in USER_MAILS:
-             # Trigger refresh logic manually by calling callback handler with fake object
-             # Or construct message directly. Calling handler is cleaner but needs trick.
-             # Let's just use the function logic.
-             user_data = USER_MAILS[user_id]
-             
-             # Send loading first
-             msg = await message.reply("🔄 Memuat inbox...")
-             
-             # Create fake callback to reuse refresh_mail_callback logic
-             # We need to monkeypatch the message object in callback query
-             fake_cb = types.CallbackQuery()
-             fake_cb.id = "0" 
-             fake_cb.from_user = message.from_user
-             fake_cb.message = msg # The loading message we just sent
-             fake_cb.data = "refresh_mail"
-             
-             await refresh_mail_callback(fake_cb)
-        else:
-             await message.reply("⚠️ <b>Belum ada email aktif.</b>\nBuat email dulu di menu Temp Mail.")
-    elif text == "🔄 Ganti Akun":
-        await list_emails(message)
-    elif text == "👤 Info User":
+    elif action == 'info':
         await info(message)
-    elif text == "❓ Help & Menu":
-        # Call help handler manually
+    elif action == 'help':
         fake_message = message
         fake_message.text = "/help"
         await helpstr(fake_message)
@@ -2226,20 +2717,112 @@ async def create_mail_callback(callback_query: types.CallbackQuery):
     fake_msg.text = "/mail" # Reset args
     await gen_mail(fake_msg)
 
-@dp.callback_query_handler(lambda c: c.data == 'm_mail_custom')
-async def custom_mail_callback(callback_query: types.CallbackQuery):
-    await bot.answer_callback_query(callback_query.id)
-    await bot.send_message(
+@dp.callback_query_handler(lambda c: c.data == 'm_mail_custom', state="*")
+async def custom_mail_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.finish() # Reset any previous state
+    await MailCustomState.username.set()
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 Batal", callback_data="m_mail"))
+    
+    await bot.edit_message_text(
+        "<b>✍️ CUSTOM TEMP MAIL</b>\n\n"
+        "Silakan masukkan <b>Username</b> yang diinginkan.\n"
+        "<i>(Hanya huruf, angka, titik, dan strip)</i>",
         callback_query.from_user.id,
-        f"<b>✍️ CUSTOM TEMP MAIL</b>\n"
-        f"Panduan membuat email dengan nama suka-suka.\n\n"
-        f"<b>Format Perintah:</b>\n"
-        f"<code>{PREFIX}mail [username]</code>\n\n"
-        f"<b>Contoh:</b>\n"
-        f"<code>{PREFIX}mail azkura123</code>\n\n"
-        f"<i>(Domain otomatis, password acak)</i>\n"
-        f"<i>Tips: Username hanya boleh huruf & angka.</i>"
+        callback_query.message.message_id,
+        reply_markup=kb
     )
+    await callback_query.answer()
+
+@dp.message_handler(state=MailCustomState.username)
+async def state_mail_username(message: types.Message, state: FSMContext):
+    username = message.text.strip().lower()
+    
+    if not re.match(r'^[a-z0-9.-]+$', username):
+         return await message.reply("⚠️ <b>Username tidak valid!</b>\nHanya gunakan huruf, angka, titik (.), dan strip (-). Silakan coba lagi.")
+    
+    if len(username) < 3 or len(username) > 30:
+        return await message.reply("⚠️ Username harus 3-30 karakter.")
+        
+    await state.update_data(username=username)
+    await MailCustomState.next()
+    
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🎲 Acak Saja", callback_data="mail_pass_random"))
+    
+    await message.reply(
+        f"<b>Username:</b> {username}\n\n"
+        "Sekarang masukkan <b>Password</b> yang diinginkan.\n"
+        "<i>Atau klik tombol 'Acak Saja' untuk password otomatis.</i>",
+        reply_markup=kb
+    )
+
+@dp.callback_query_handler(text="mail_pass_random", state=MailCustomState.password)
+async def cb_mail_pass_random(call: types.CallbackQuery, state: FSMContext):
+    await execute_custom_mail(call.message, state, use_random_pass=True)
+    await call.answer()
+
+@dp.message_handler(state=MailCustomState.password)
+async def state_mail_password(message: types.Message, state: FSMContext):
+    password = message.text.strip()
+    if len(password) < 5:
+        return await message.reply("⚠️ Password terlalu pendek (min 5 karakter).")
+        
+    await execute_custom_mail(message, state, password=password)
+
+async def execute_custom_mail(message: types.Message, state: FSMContext, password=None, use_random_pass=False):
+    data = await state.get_data()
+    username = data['username']
+    user_id = message.chat.id # Chat ID is User ID in PM
+    
+    if use_random_pass:
+        password = "Pwd" + ''.join(random.choices(string.ascii_letters + string.digits, k=8))
+        
+    # Get Domain
+    domains = get_mail_domains()
+    if not domains:
+        await state.finish()
+        return await message.reply("⚠️ <b>Gagal mengambil domain email. Coba lagi nanti.</b>")
+    
+    domain = domains[0]['domain']
+    email = f"{username}@{domain}"
+    
+    await message.answer_chat_action('typing')
+    
+    # Create Account
+    if create_mail_account(email, password):
+        token = get_mail_token(email, password)
+        if token:
+            # Save
+            USER_MAILS[user_id] = {
+                "email": email,
+                "password": password,
+                "token": token
+            }
+            save_email_session(user_id, email, password, token)
+            
+            kb = types.InlineKeyboardMarkup(row_width=2)
+            kb.add(types.InlineKeyboardButton("📩 Cek Inbox (0)", callback_data="refresh_mail"))
+            kb.add(types.InlineKeyboardButton("🔄 Ganti Akun", callback_data="m_mail_list"))
+            
+            await message.reply(
+                f"<b>📧 CUSTOM MAIL CREATED</b>\n"
+                f"━━━━━━━━━━━━━━━━━━\n"
+                f"<b>Email:</b> <code>{email}</code>\n"
+                f"<b>Password:</b> <code>{password}</code>\n\n"
+                f"<i>Klik tombol di bawah untuk cek pesan masuk.</i>",
+                reply_markup=kb
+            )
+        else:
+            await message.reply("⚠️ <b>Gagal mengambil token akun.</b>")
+    else:
+        await message.reply(
+            f"⚠️ <b>Gagal membuat akun email.</b>\n"
+            f"Kemungkinan username <code>{username}</code> sudah terpakai."
+        )
+    
+    await state.finish()
 
 @dp.callback_query_handler(lambda c: c.data == 'm_mail_login')
 async def login_mail_menu_callback(callback_query: types.CallbackQuery):
@@ -2255,128 +2838,208 @@ async def login_mail_menu_callback(callback_query: types.CallbackQuery):
         f"<i>Catatan: Hanya bisa login jika akun belum dihapus dari server.</i>"
     )
 
-@dp.callback_query_handler(lambda c: c.data == 'm_mail_list')
+@dp.callback_query_handler(lambda c: c.data.startswith('m_mail_list'))
 async def list_emails_callback(callback_query: types.CallbackQuery):
-    # Reuse list_emails logic but with edit_message if possible, or new message.
-    # Since list_emails takes a Message object, we can construct a fake one or extract logic.
-    # Easiest is to just call the function with a fake message.
-    
-    await bot.answer_callback_query(callback_query.id)
-    fake_message = callback_query.message
-    fake_message.from_user = callback_query.from_user
-    await list_emails(fake_message)
-
-
-@dp.callback_query_handler(lambda c: c.data == 'refresh_mail' or c.data.startswith('mail_page_'))
-async def refresh_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    user_data = USER_MAILS.get(user_id)
     
-    # Determine page number
+    # Parse data: m_mail_list:page:mode
+    parts = callback_query.data.split(':')
     page = 0
-    if c_data := callback_query.data:
-        if c_data.startswith('mail_page_'):
-            try:
-                page = int(c_data.split('_')[2])
-            except ValueError: page = 0
+    mode = "view" # view or del
     
-    if not user_data:
-        if callback_query.id != "0":
-            await bot.answer_callback_query(callback_query.id, "⚠️ Sesi email berakhir.", show_alert=True)
-        return await bot.send_message(user_id, "⚠️ <b>Sesi email berakhir.</b> Buat baru dengan <code>/mail</code>.")
+    if len(parts) > 1:
+        try: page = int(parts[1])
+        except: page = 0
+    if len(parts) > 2:
+        mode = parts[2]
+
+    saved = SAVED_MAILS.get(user_id, [])
+    if not saved:
+        return await callback_query.message.edit_text(
+            "⚠️ <b>Belum ada riwayat email.</b>\nBuat dulu dengan opsi di menu Temp Mail.",
+            reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 Menu Temp Mail", callback_data="m_mail"))
+        )
+
+    # Pagination Logic
+    MAX_PER_PAGE = 5
+    total_items = len(saved)
+    total_pages = (total_items + MAX_PER_PAGE - 1) // MAX_PER_PAGE
     
-    messages = get_mail_messages(user_data['token'])
-    if messages is None:
-        if callback_query.id != "0":
-            await bot.answer_callback_query(callback_query.id, "⚠️ Gagal mengambil pesan.", show_alert=True)
-        return
-    
-    total_msgs = len(messages)
-    items_per_page = 5
-    total_pages = (total_msgs + items_per_page - 1) // items_per_page
-    
-    # Validation page range
     if page < 0: page = 0
     if page >= total_pages and total_pages > 0: page = total_pages - 1
     
-    start_idx = page * items_per_page
-    end_idx = start_idx + items_per_page
-    current_msgs = messages[start_idx:end_idx]
+    start_idx = page * MAX_PER_PAGE
+    end_idx = start_idx + MAX_PER_PAGE
+    current_page_items = saved[start_idx:end_idx]
+    
+    current_email = USER_MAILS.get(user_id, {}).get('email', '')
     
     kb = types.InlineKeyboardMarkup(row_width=1)
     
-    # 1. List Messages as Buttons
-    if current_msgs:
-        for msg in current_msgs:
-            sender = msg.get('from', {}).get('address', 'Unknown')
-            subject = msg.get('subject', 'No Subject')
-            msg_id = msg.get('id')
-            is_seen = "📖" if msg.get('seen') else "✉️"
-            # Button text: "Icon Sender | Subject"
-            btn_text = f"{is_seen} {sender.split('@')[0]} | {subject[:15]}..."
-            kb.add(types.InlineKeyboardButton(btn_text, callback_data=f"read_{msg_id}"))
-    
-    # 2. Pagination Buttons
-    if total_pages > 1:
-        nav_row = []
-        # Prev Button
-        if page > 0:
-            nav_row.append(types.InlineKeyboardButton("⬅️ Prev", callback_data=f"mail_page_{page-1}"))
-        else:
-            nav_row.append(types.InlineKeyboardButton("➖", callback_data="ignore"))
-            
-        # Page Indicator
-        nav_row.append(types.InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ignore"))
+    # List Buttons
+    for i, data in enumerate(current_page_items):
+        actual_idx = start_idx + i
+        email = data['email']
+        is_active = "✅ " if email == current_email else ""
         
-        # Next Button
-        if page < total_pages - 1:
-            nav_row.append(types.InlineKeyboardButton("Next ➡️", callback_data=f"mail_page_{page+1}"))
+        if mode == "del":
+            # Delete Mode: Button deletes the email
+            btn_text = f"🗑 Hapus: {email}"
+            cb_data = f"dm_mail_{actual_idx}_{page}"
         else:
-            nav_row.append(types.InlineKeyboardButton("➖", callback_data="ignore"))
+            # View Mode: Button switches account
+            btn_text = f"{is_active}{email}"
+            cb_data = f"sw_mail_{actual_idx}_{page}"
             
-        kb.row(*nav_row)
-
-    # 3. Control Buttons
-    kb.row(
-        types.InlineKeyboardButton(f"🔄 Refresh ({total_msgs})", callback_data="refresh_mail"),
-        types.InlineKeyboardButton("📋 List Akun", callback_data="m_mail_list")
-    )
+        kb.add(types.InlineKeyboardButton(btn_text, callback_data=cb_data))
     
-    email = user_data['email']
-    status_text = "🟢 Active"
+    # Navigation Buttons
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(types.InlineKeyboardButton("⬅️", callback_data=f"m_mail_list:{page-1}:{mode}"))
     
-    body_text = f"<i>Klik pesan di bawah untuk membaca isi lengkapnya.</i>" if total_msgs > 0 else "<i>Inbox masih kosong, belum ada pesan masuk.</i>"
+    nav_buttons.append(types.InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="ignore"))
+    
+    if page < total_pages - 1:
+        nav_buttons.append(types.InlineKeyboardButton("➡️", callback_data=f"m_mail_list:{page+1}:{mode}"))
+    
+    kb.row(*nav_buttons)
+    
+    # Control Buttons
+    if mode == "del":
+        kb.add(types.InlineKeyboardButton("🔙 Selesai Hapus", callback_data=f"m_mail_list:{page}:view"))
+    else:
+        kb.row(
+            types.InlineKeyboardButton("🗑 Hapus Akun", callback_data=f"m_mail_list:{page}:del"),
+            types.InlineKeyboardButton("🔙 Menu Temp Mail", callback_data="m_mail")
+        )
 
-    full_text = f"""
-╭━━━━━━━❖ 📩 <b>INBOX MANAGER</b> ❖━━━━━━━╮
-║
-║ ├─ <b>Account:</b> <code>{email}</code>
-║ ├─ <b>Status:</b> {status_text}
-║ └─ <b>Total Messages:</b> {total_msgs}
-║
-╰━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╯
-{body_text}
-"""
+    title_mode = "MENGHAPUS AKUN" if mode == "del" else "Saved Emails"
+    instr = "Klik akun untuk <b>MENGHAPUS</b> permanen." if mode == "del" else "Klik akun di bawah untuk ganti sesi (Switch)."
+    
+    text = f"<b>📧 {title_mode} ({total_items})</b>\n{instr}"
+    
+    # Edit message text if it's a callback update
+    try:
+        await callback_query.message.edit_text(text, reply_markup=kb)
+    except Exception:
+        pass # Content same
+    await callback_query.answer()
+
+@dp.callback_query_handler(lambda c: c.data.startswith('dm_mail_'))
+async def delete_saved_mail_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    parts = callback_query.data.split('_')
+    # Format: dm_mail_{index}_{page}
     
     try:
-        await bot.edit_message_text(
-            text=full_text,
-            chat_id=user_id,
-            message_id=callback_query.message.message_id,
-            reply_markup=kb,
-            parse_mode=types.ParseMode.HTML
-        )
-    except Exception as e:
-        # If edit fails (e.g. content same), try sending as new message if it was a fake call
-        if callback_query.id == "0":
-             await bot.send_message(user_id, full_text, reply_markup=kb)
+        idx = int(parts[2])
+        page = int(parts[3])
+    except:
+        return await callback_query.answer("Error data.")
+        
+    saved = SAVED_MAILS.get(user_id, [])
+    if idx < 0 or idx >= len(saved):
+        return await callback_query.answer("Data tidak ditemukan.", show_alert=True)
     
-    if callback_query.id != "0":
-        # Only answer real callbacks
-        if not c_data.startswith('mail_page_'):
-             await bot.answer_callback_query(callback_query.id, "✅ Inbox diperbarui.")
-        else:
-             await bot.answer_callback_query(callback_query.id)
+    # Get email to be deleted
+    deleted_email = saved[idx]['email']
+    
+    # Check if active
+    current = USER_MAILS.get(user_id, {})
+    if current.get('email') == deleted_email:
+        # Clear active session if we delete the active one
+        USER_MAILS.pop(user_id, None)
+        
+    # Delete from list
+    saved.pop(idx)
+    SAVED_MAILS[user_id] = saved
+    
+    await callback_query.answer(f"🗑 {deleted_email} dihapus.")
+    
+    # Refresh list (stay in delete mode)
+    # Redirect to list handler
+    # Note: indices shift after delete, but we refresh the list so it should be fine.
+    # However, if we are on the last item of a page, we might need to adjust page?
+    # The list handler handles page >= total_pages adjustment.
+    
+    callback_query.data = f"m_mail_list:{page}:del"
+    await list_emails_callback(callback_query)
+
+
+@dp.message_handler(commands=['emails', 'listmail'], commands_prefix=PREFIX)
+async def list_emails(message: types.Message):
+    # Wrapper to call the callback logic with a dummy callback query
+    # Need to simulate sending the initial message first
+    user_id = message.from_user.id
+    saved = SAVED_MAILS.get(user_id, [])
+    
+    if not saved:
+        return await message.reply("⚠️ <b>Belum ada riwayat email.</b>")
+
+    # Construct initial view (Page 0)
+    # We can't reuse the callback handler directly easily because it expects a CallbackQuery object
+    # So we replicate the page 0 logic briefly or create a dummy object.
+    # Replicating page 0 logic is safer here.
+    
+    MAX_PER_PAGE = 5
+    total_items = len(saved)
+    total_pages = (total_items + MAX_PER_PAGE - 1) // MAX_PER_PAGE
+    page = 0
+    
+    current_page_items = saved[0:MAX_PER_PAGE]
+    current_email = USER_MAILS.get(user_id, {}).get('email', '')
+    
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    for i, data in enumerate(current_page_items):
+        email = data['email']
+        is_active = "✅ " if email == current_email else ""
+        kb.add(types.InlineKeyboardButton(f"{is_active}{email}", callback_data=f"sw_mail_{i}_{page}"))
+        
+    nav_buttons = []
+    nav_buttons.append(types.InlineKeyboardButton(f"📄 1/{total_pages}", callback_data="ignore"))
+    if total_pages > 1:
+        nav_buttons.append(types.InlineKeyboardButton("➡️", callback_data=f"m_mail_list:1"))
+    
+    kb.row(*nav_buttons)
+    kb.add(types.InlineKeyboardButton("🔙 Menu Temp Mail", callback_data="m_mail"))
+    
+    await message.reply(
+        f"<b>📧 Saved Emails ({total_items})</b>\nKlik akun di bawah untuk ganti sesi (Switch).",
+        reply_markup=kb
+    )
+
+@dp.callback_query_handler(lambda c: c.data.startswith('sw_mail_'))
+async def switch_mail_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    parts = callback_query.data.split('_')
+    # Format: sw_mail_{index}_{page}
+    
+    try:
+        idx = int(parts[2])
+        page = int(parts[3]) if len(parts) > 3 else 0
+    except ValueError:
+        return await callback_query.answer("Error data.")
+
+    saved = SAVED_MAILS.get(user_id, [])
+    
+    if idx < 0 or idx >= len(saved):
+        return await bot.answer_callback_query(callback_query.id, "⚠️ Data tidak ditemukan.", show_alert=True)
+        
+    selected_account = saved[idx]
+    
+    # Set as Active
+    USER_MAILS[user_id] = selected_account
+    
+    email = selected_account['email']
+    
+    await bot.answer_callback_query(callback_query.id, f"✅ Switched to: {email}")
+    
+    # Refresh List UI to show checkmark (Reuse logic by redirecting to m_mail_list:page)
+    # We can manually trigger the UI update by modifying the callback data and calling the list handler
+    callback_query.data = f"m_mail_list:{page}"
+    await list_emails_callback(callback_query)
+
 
 # Handler for 'ignore' callback (static buttons)
 @dp.callback_query_handler(lambda c: c.data == 'ignore')
@@ -2462,84 +3125,9 @@ async def delete_mail_callback(callback_query: types.CallbackQuery):
 
 
 
-@dp.message_handler(commands=['emails', 'listmail'], commands_prefix=PREFIX)
-async def list_emails(message: types.Message):
-    user_id = message.from_user.id
-    saved = SAVED_MAILS.get(user_id, [])
-    
-    if not saved:
-        return await message.reply("⚠️ <b>Belum ada riwayat email.</b>\nBuat dulu dengan <code>/mail</code> atau <code>/fake</code>.")
 
-    current_email = USER_MAILS.get(user_id, {}).get('email', '')
-    
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    text_lines = []
-    
-    for idx, data in enumerate(saved):
-        email = data['email']
-        is_active = "✅ " if email == current_email else ""
-        btn_text = f"{is_active}{email}"
-        # Callback data format: switch_mail_<index>
-        kb.add(types.InlineKeyboardButton(btn_text, callback_data=f"sw_mail_{idx}"))
-        text_lines.append(f"{idx+1}. <code>{email}</code>")
 
-    await message.reply(
-        f"<b>📧 Saved Emails</b>\nKlik akun di bawah untuk ganti sesi (Switch).\n━━━━━━━━━━━━━━━━━━\n" + "\n".join(text_lines),
-        reply_markup=kb
-    )
 
-@dp.callback_query_handler(lambda c: c.data.startswith('sw_mail_'))
-async def switch_mail_callback(callback_query: types.CallbackQuery):
-    user_id = callback_query.from_user.id
-    try:
-        idx = int(callback_query.data.split('_')[2])
-        saved = SAVED_MAILS.get(user_id, [])
-        
-        if idx < 0 or idx >= len(saved):
-            return await bot.answer_callback_query(callback_query.id, "⚠️ Data tidak ditemukan.", show_alert=True)
-            
-        selected_account = saved[idx]
-        
-        # Set as Active
-        USER_MAILS[user_id] = selected_account
-        
-        email = selected_account['email']
-        password = selected_account['password']
-        
-        # Refresh List UI to show checkmark
-        current_email = email
-        kb = types.InlineKeyboardMarkup(row_width=1)
-        for i, data in enumerate(saved):
-            e = data['email']
-            is_active = "✅ " if e == current_email else ""
-            kb.add(types.InlineKeyboardButton(f"{is_active}{e}", callback_data=f"sw_mail_{i}"))
-        
-        try:
-            await bot.edit_message_reply_markup(
-                chat_id=user_id,
-                message_id=callback_query.message.message_id,
-                reply_markup=kb
-            )
-        except: pass
-
-        # Send confirmation details
-        kb_inbox = types.InlineKeyboardMarkup(row_width=2)
-        kb_inbox.add(types.InlineKeyboardButton("📩 Cek Inbox", callback_data="refresh_mail"))
-        kb_inbox.add(types.InlineKeyboardButton("🔄 Ganti Akun Lagi", callback_data="m_mail_list"))
-        
-        await bot.send_message(
-            user_id,
-            f"<b>✅ Berhasil Ganti Akun!</b>\n"
-            f"━━━━━━━━━━━━━━━━━━\n"
-            f"<b>Email:</b> <code>{email}</code>\n"
-            f"<b>Pass:</b> <code>{password}</code>",
-            reply_markup=kb_inbox
-        )
-        await bot.answer_callback_query(callback_query.id, f"Aktif: {email}")
-        
-    except Exception as e:
-        logging.error(f"Switch mail error: {e}")
-        await bot.answer_callback_query(callback_query.id, "⚠️ Terjadi kesalahan.", show_alert=True)
 
 
 
@@ -2554,283 +3142,31 @@ async def fake_identity(message: types.Message):
     if len(args) > 1:
         country_code = args[1].lower()
     
-    # --- 1. SET UP LOCALES ---
-    target_locale = FAKER_LOCALES.get(country_code, 'en_US')
-    
-    # List of countries that need manual Romanization (Latin Names)
-    non_latin_countries = ['jp', 'cn', 'ru', 'kr', 'th', 'ua', 'vn', 'tw', 'ir']
-    
     try:
-        # Initialize Faker
-        fake_loc = Faker(target_locale) 
-        fake_en = Faker('en_US') # Fallback
+        # Generate Identity using the new module
+        data = identity.generate_identity(country_code)
         
-        # --- 2. DETERMINING GENDER & NAME ---
-        gender_code = random.choice(['m', 'f'])
-        gender = "Male ♂️" if gender_code == 'm' else "Female ♀️"
-        
-        name = ""
-        
-        if country_code in non_latin_countries:
-            # Romanized Name Logic
-            romanized = names_db.get_romanized_name(country_code)
-            if romanized:
-                name = romanized
-            else:
-                 name = fake_en.name_male() if gender_code == 'm' else fake_en.name_female()
-        else:
-            # Faker Gender Aware
-            try:
-                name = fake_loc.name_male() if gender_code == 'm' else fake_loc.name_female()
-            except:
-                name = fake_loc.name()
+        # Save to memory for "Save to Note" feature
+        LAST_GEN_ID[user_id] = data
 
-        # --- 3. BIRTH & AGE ---
-        dob_date = fake_loc.date_of_birth(minimum_age=18, maximum_age=50)
-        dob = dob_date.strftime("%d/%m/%Y")
-        today = datetime.today()
-        age = today.year - dob_date.year - ((today.month, today.day) < (dob_date.month, dob_date.day))
+        # --- MAIL GENERATION INTEGRATION ---
+        # Use generated email/pass from identity module
+        email_addr = data['email']
+        password = data['password']
         
-        # --- 4. LOCATION & ID LOGIC ---
-        address = ""
-        city = ""
-        state = ""
-        postcode = ""
-        ssn = ""
-        
-        # CONSISTENT LOCATION DATA (Manual Mapping for ALL Menu Countries)
-        # Format: 'CountryCode': {'State': ['City1', 'City2']}
-        COUNTRY_DATA = {
-            'us': { # United States
-                'California': ['Los Angeles', 'San Francisco', 'San Diego', 'Sacramento', 'San Jose'],
-                'New York': ['New York City', 'Buffalo', 'Rochester', 'Yonkers', 'Syracuse'],
-                'Texas': ['Houston', 'San Antonio', 'Dallas', 'Austin', 'Fort Worth'],
-                'Florida': ['Miami', 'Orlando', 'Tampa', 'Jacksonville', 'Tallahassee'],
-                'Illinois': ['Chicago', 'Aurora', 'Naperville', 'Joliet', 'Rockford'],
-                'Pennsylvania': ['Philadelphia', 'Pittsburgh', 'Allentown', 'Erie', 'Reading']
-            },
-            'gb': { # United Kingdom
-                'Greater London': ['London', 'Westminster', 'Camden', 'Greenwich'],
-                'Greater Manchester': ['Manchester', 'Bolton', 'Stockport', 'Wigan'],
-                'West Midlands': ['Birmingham', 'Coventry', 'Wolverhampton', 'Solihull'],
-                'West Yorkshire': ['Leeds', 'Bradford', 'Wakefield'],
-                'Merseyside': ['Liverpool', 'Sefton', 'Wirral']
-            },
-            'uk': { # Alias for GB
-                'Greater London': ['London', 'Westminster'], 'Greater Manchester': ['Manchester', 'Bolton']
-            },
-            'jp': { # Japan (Latin)
-                'Tokyo': ['Shinjuku', 'Shibuya', 'Minato', 'Chiyoda', 'Setagaya'],
-                'Osaka': ['Osaka', 'Sakai', 'Toyonaka'],
-                'Hokkaido': ['Sapporo', 'Asahikawa', 'Hakodate'],
-                'Kyoto': ['Kyoto', 'Uji', 'Kameoka'],
-                'Kanagawa': ['Yokohama', 'Kawasaki', 'Sagamihara']
-            },
-            'kr': { # South Korea (Latin)
-                'Seoul': ['Gangnam', 'Mapo', 'Songpa', 'Yongsan'],
-                'Busan': ['Haeundae', 'Busanjin', 'Saha'],
-                'Incheon': ['Bupyeong', 'Yeonsu', 'Namdong'],
-                'Gyeonggi-do': ['Suwon', 'Seongnam', 'Goyang', 'Yongin']
-            },
-            'cn': { # China (Latin)
-                'Beijing': ['Chaoyang', 'Haidian', 'Dongcheng'],
-                'Shanghai': ['Pudong', 'Minhang', 'Xuhui'],
-                'Guangdong': ['Guangzhou', 'Shenzhen', 'Dongguan', 'Foshan'],
-                'Sichuan': ['Chengdu', 'Mianyang']
-            },
-            'ru': { # Russia (Latin)
-                'Moscow': ['Moscow City', 'Zelenograd', 'Khimki'],
-                'Saint Petersburg': ['St. Petersburg', 'Kronstadt'],
-                'Novosibirsk Oblast': ['Novosibirsk', 'Berdsk'],
-                'Sverdlovsk Oblast': ['Yekaterinburg', 'Nizhny Tagil']
-            },
-            'in': { # India
-                'Maharashtra': ['Mumbai', 'Pune', 'Nagpur', 'Nashik'],
-                'Delhi': ['New Delhi', 'North Delhi', 'South Delhi'],
-                'Karnataka': ['Bangalore', 'Mysore', 'Mangalore'],
-                'Tamil Nadu': ['Chennai', 'Coimbatore', 'Madurai'],
-                'West Bengal': ['Kolkata', 'Howrah']
-            },
-            'de': { # Germany
-                'Bavaria': ['Munich', 'Nuremberg', 'Augsburg'],
-                'Berlin': ['Berlin', 'Spandau'],
-                'Hamburg': ['Hamburg', 'Altona'],
-                'North Rhine-Westphalia': ['Cologne', 'Düsseldorf', 'Dortmund', 'Essen'],
-                'Hesse': ['Frankfurt', 'Wiesbaden', 'Kassel']
-            },
-            'fr': { # France
-                'Île-de-France': ['Paris', 'Boulogne-Billancourt', 'Saint-Denis'],
-                'Provence-Alpes-Côte d\'Azur': ['Marseille', 'Nice', 'Toulon'],
-                'Auvergne-Rhône-Alpes': ['Lyon', 'Saint-Étienne', 'Grenoble'],
-                'Occitanie': ['Clermont-Ferrand', 'Montpellier', 'Nîmes'] # Fixed list
-            },
-            'es': { # Spain
-                'Madrid': ['Madrid', 'Móstoles', 'Alcalá de Henares'],
-                'Catalonia': ['Barcelona', 'L\'Hospitalet', 'Badalona'],
-                'Andalusia': ['Seville', 'Málaga', 'Córdoba'],
-                'Valencia': ['Valencia', 'Alicante', 'Elche']
-            },
-            'it': { # Italy
-                'Lazio': ['Rome', 'Latina', 'Guidonia Montecelio'],
-                'Lombardy': ['Milan', 'Brescia', 'Monza'],
-                'Campania': ['Naples', 'Salerno', 'Giugliano'],
-                'Piedmont': ['Turin', 'Bergamo', 'Novara']
-            },
-            'ca': { # Canada
-                'Ontario': ['Toronto', 'Ottawa', 'Mississauga', 'Brampton'],
-                'Quebec': ['Montreal', 'Quebec City', 'Laval'],
-                'British Columbia': ['Vancouver', 'Surrey', 'Burnaby'],
-                'Alberta': ['Calgary', 'Edmonton']
-            },
-            'au': { # Australia
-                'New South Wales': ['Sydney', 'Newcastle', 'Wollongong'],
-                'Victoria': ['Melbourne', 'Geelong', 'Ballarat'],
-                'Queensland': ['Brisbane', 'Gold Coast', 'Sunshine Coast'],
-                'Western Australia': ['Perth', 'Mandurah']
-            },
-            'nl': { # Netherlands
-                'North Holland': ['Amsterdam', 'Haarlem', 'Zaanstad'],
-                'South Holland': ['Rotterdam', 'The Hague', 'Zoetermeer'],
-                'Utrecht': ['Utrecht', 'Amersfoort'],
-                'North Brabant': ['Eindhoven', 'Tilburg', 'Breda']
-            },
-            'br': { # Brazil
-                'São Paulo': ['São Paulo', 'Guarulhos', 'Campinas'],
-                'Rio de Janeiro': ['Rio de Janeiro', 'São Gonçalo'],
-                'Minas Gerais': ['Belo Horizonte', 'Uberlândia'],
-                'Bahia': ['Salvador', 'Feira de Santana']
-            },
-            'my': { # Malaysia
-                'Selangor': ['Shah Alam', 'Petaling Jaya', 'Subang Jaya', 'Klang'],
-                'Kuala Lumpur': ['Kuala Lumpur', 'Bukit Bintang', 'Cheras'],
-                'Johor': ['Johor Bahru', 'Iskandar Puteri', 'Muar'],
-                'Penang': ['George Town', 'Butterworth']
-            },
-            'th': { # Thailand (Latin)
-                'Bangkok': ['Bangkok', 'Nonthaburi', 'Pak Kret'],
-                'Chiang Mai': ['Chiang Mai City', 'San Sai'],
-                'Phuket': ['Phuket City', 'Kathu'],
-                'Chon Buri': ['Pattaya', 'Si Racha']
-            },
-            'vn': { # Vietnam (Latin)
-                'Hanoi': ['Hoan Kiem', 'Ba Dinh', 'Dong Da'],
-                'Ho Chi Minh City': ['District 1', 'District 7', 'Thu Duc'],
-                'Da Nang': ['Hai Chau', 'Son Tra'],
-                'Hai Phong': ['Hai An', 'Le Chan']
-            },
-            'ph': { # Philippines
-                'Metro Manila': ['Manila', 'Quezon City', 'Makati', 'Taguig'],
-                'Cebu': ['Cebu City', 'Mandaue', 'Lapu-Lapu'],
-                'Davao': ['Davao City', 'Panabo'],
-                'Calabarzon': ['Antipolo', 'Bacoor', 'Dasma']
-            },
-            'sg': { # Singapore (City State)
-                'Singapore': ['Central Region', 'Jurong East', 'Woodlands', 'Tampines', 'Bedok']
-            },
-            'tr': { # Turkey
-                'Istanbul': ['Istanbul', 'Esenyurt', 'Fatih'],
-                'Ankara': ['Ankara', 'Cankaya', 'Kecioren'],
-                'Izmir': ['Izmir', 'Buca', 'Karsiyaka']
-            },
-            'pl': { # Poland
-                'Masovian': ['Warsaw', 'Radom', 'Plock'],
-                'Lesser Poland': ['Krakow', 'Tarnow'],
-                'Silesian': ['Katowice', 'Czestochowa']
-            },
-            'ua': { # Ukraine (Latin)
-                'Kyiv': ['Kyiv City', 'Bila Tserkva'],
-                'Lviv': ['Lviv City', 'Drohobych'],
-                'Odessa': ['Odessa City', 'Izmail']
-            }
-        }
-
-        # >>>> LOGIC: INDONESIA (Complex NIK) <<<<
-        if country_code == 'id':
-            ID_LOCATIONS = {
-                'DKI Jakarta': {'code': '31', 'cities': ['Jakarta Selatan', 'Jakarta Pusat', 'Jakarta Barat', 'Jakarta Timur']},
-                'Jawa Barat': {'code': '32', 'cities': ['Bandung', 'Bekasi', 'Depok', 'Bogor', 'Cimahi']},
-                'Jawa Tengah': {'code': '33', 'cities': ['Semarang', 'Surakarta', 'Tegal', 'Pekalongan']},
-                'Jawa Timur': {'code': '35', 'cities': ['Surabaya', 'Malang', 'Kediri', 'Madiun']},
-                'Banten': {'code': '36', 'cities': ['Tangerang', 'Serang', 'Cilegon', 'Tangerang Selatan']},
-                'Bali': {'code': '51', 'cities': ['Denpasar', 'Singaraja']},
-                'Sumatera Utara': {'code': '12', 'cities': ['Medan', 'Binjai', 'Pematangsiantar']},
-                'Sulawesi Selatan': {'code': '73', 'cities': ['Makassar', 'Parepare', 'Palopo']}
-            }
-            state = random.choice(list(ID_LOCATIONS.keys()))
-            city = random.choice(ID_LOCATIONS[state]['cities'])
-            
-            # Address & Postcode
-            street_prefix = random.choice(['Jl.', 'Jalan', 'Gg.', 'Gang'])
-            street_name = fake_loc.street_name().replace('Jalan ', '').replace('Jl. ', '')
-            address = f"{street_prefix} {street_name} No. {random.randint(1, 200)}, RT {random.randint(1,15):02}/RW {random.randint(1,15):02}"
-            postcode = str(random.randint(10000, 99999))
-            
-            # NIK Logic
-            pp = ID_LOCATIONS[state]['code']
-            kk, cc = f"{random.randint(1, 70):02}", f"{random.randint(1, 50):02}"
-            day = dob_date.day + 40 if gender_code == 'f' else dob_date.day
-            ssn = f"{pp}{kk}{cc}{day:02}{dob_date.month:02}{str(dob_date.year)[-2:]}{random.randint(1, 999):04}"
-
-        # >>>> LOGIC: MAPPED COUNTRIES (ALL OTHERS) <<<<
-        elif country_code in COUNTRY_DATA:
-            # Consistent State & City
-            state = random.choice(list(COUNTRY_DATA[country_code].keys()))
-            city = random.choice(COUNTRY_DATA[country_code][state])
-            
-            # Address & Postcode
-            if country_code in non_latin_countries or country_code == 'jp':
-                # Force English Address for non-Latin to be safe
-                address = f"{random.randint(1,999)} {fake_en.street_name()}"
-                postcode = f"{random.randint(10000,99999)}"
-            else:
-                address = fake_loc.street_address()
-                postcode = fake_loc.postcode()
-            
-            # SSN/ID
-            if hasattr(fake_loc, 'ssn'):
-                ssn = fake_loc.ssn()
-            else:
-                ssn = str(random.randint(100000000, 999999999))
-
-        # >>>> LOGIC: GENERIC FALLBACK (If code not in list) <<<<
-        else:
-            if country_code in non_latin_countries or country_code in ['tw', 'vn']:
-                 address = fake_en.street_address()
-                 city = fake_en.city()
-                 state = fake_en.state()
-                 postcode = fake_en.postcode()
-            else:
-                 address = fake_loc.street_address()
-                 city = fake_loc.city()
-                 if hasattr(fake_loc, 'state'): state = fake_loc.state()
-                 elif hasattr(fake_loc, 'province'): state = fake_loc.province()
-                 else: state = city 
-                 postcode = fake_loc.postcode()
-            
-            ssn = fake_loc.ssn() if hasattr(fake_loc, 'ssn') else str(random.randint(100000000, 999999999))
-
-        # Job & Company
-        job = fake_en.job()
-        if country_code in non_latin_countries:
-             local_name_parts = names_db.get_romanized_name(country_code).split()
-             local_last_name = local_name_parts[-1] 
-             company = f"{local_last_name} {random.choice(['Corp', 'Inc', 'Ltd', 'Group'])}"
-        else:
-             company = fake_loc.company() if hasattr(fake_loc, 'company') else fake_en.company()
-        
-        # Tech & Mail (Standard)
-        phone = fake_loc.phone_number()
-        ip_addr = fake_loc.ipv4()
-        user_agent = fake_loc.user_agent()
-        
-        safe_name = re.sub(r'[^a-z0-9]', '', name.lower())
-        email_user = f"{safe_name}{random.randint(10, 999)}"
+        # Try to register to Mail.tm
         domains = get_mail_domains()
+        token = None
+        email_status = "🔴 Offline"
         
         if domains:
-            domain = domains[0]['domain']
-            email_addr = f"{email_user}@{domain}"
-            password = f"{safe_name[:5].capitalize()}{dob_date.year}{random.randint(10,99)}"
+            valid_domain = domains[0]['domain']
+            # Re-construct email with valid domain
+            user_part = data['email'].split('@')[0]
+            email_addr = f"{user_part}@{valid_domain}"
+            
+            # Update data dictionary
+            data['email'] = email_addr
             
             if create_mail_account(email_addr, password):
                 token = get_mail_token(email_addr, password)
@@ -2839,57 +3175,65 @@ async def fake_identity(message: types.Message):
                     save_email_session(user_id, email_addr, password, token)
                     email_status = "🟢 Active"
                 else:
-                    email_status = "🔴 Error"
-                    token = None
+                    email_status = "🔴 Error (Token)"
             else:
-                email_status = "🔴 Fail"
-                token = None
-        else:
-            email_addr = f"{email_user}@example.com"
-            email_status = "🔴 Offline"
-            password, token = "N/A", None
+                email_status = "🔴 Fail (Create)"
         
-        kb = None
+        OUTPUT = identity.format_identity_message(data, first_name_user, user_id)
+        
+        # Keyboard Setup
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        
+        # Mail Buttons (Only if token exists)
         if token:
-            kb = types.InlineKeyboardMarkup(row_width=2)
             kb.add(types.InlineKeyboardButton("📩 Check Inbox", callback_data="refresh_mail"))
             kb.add(types.InlineKeyboardButton("🔄 Switch Account", callback_data="m_mail_list"))
+        
+        # Save Button (Always Available)
+        kb.add(types.InlineKeyboardButton("💾 Simpan ke Catatan", callback_data="save_fake_id"))
             
-        OUTPUT = f"""
-<b>👤 IDENTITY GENERATED</b>
-━━━━━━━━━━━━━━━━━━
-<b>Personal Details</b>
-<b>Name:</b> <code>{name}</code>
-<b>Gender:</b> {gender}
-<b>Birth:</b> {dob} ({age} y.o)
-<b>Job:</b> {job}
-<b>Comp:</b> {company}
-<b>ID/SSN:</b> <code>{ssn}</code>
-
-<b>Location Info</b>
-<b>Addr:</b> <code>{address}</code>
-<b>City:</b> {city}
-<b>State:</b> {state}
-<b>Zip:</b> <code>{postcode}</code>
-<b>Country:</b> {country_code.upper()} 🏳️
-
-<b>Contact & Online</b>
-<b>Phone:</b> <code>{phone}</code>
-<b>Email:</b> <code>{email_addr}</code>
-<b>Pass:</b> <code>{password}</code>
-<b>Status:</b> {email_status}
-<b>IP:</b> <code>{ip_addr}</code>
-
-<i>User Agent:</i>
-<code>{user_agent}</code>
-━━━━━━━━━━━━━━━━━━
-<b>Generated by:</b> <a href="tg://user?id={user_id}">{first_name_user}</a>
-"""
         await message.reply(OUTPUT, reply_markup=kb, disable_web_page_preview=True)
 
     except Exception as e:
         logging.error(f"Error generating fake ID: {e}")
         await message.reply(f"⚠️ <b>Error:</b> {e}\nTry another country code.")
+
+@dp.callback_query_handler(lambda c: c.data == 'save_fake_id')
+async def save_fake_id_callback(callback_query: types.CallbackQuery):
+    user_id = callback_query.from_user.id
+    data = LAST_GEN_ID.get(user_id)
+    
+    if not data:
+        return await callback_query.answer("⚠️ Data kadaluarsa/hilang. Silakan generate ulang.", show_alert=True)
+    
+    # Create Title: "ID [CODE] - Name"
+    title = f"ID {data['country_code'].upper()}: {data['name']}"
+    
+    # Create Clean Content (Plain Text for Note)
+    content = (
+        f"Name: {data['name']}\n"
+        f"Gender: {data['gender']}\n"
+        f"DOB: {data['dob']} ({data['age']} yo)\n"
+        f"Job: {data['job']}\n"
+        f"ID/SSN: {data['ssn']}\n"
+        f"Address: {data['address']}, {data['city']}\n"
+        f"Phone: {data['phone']}\n\n"
+        f"Email: {data['email']}\n"
+        f"Pass: {data['password']}"
+    )
+    
+    # Save to DB
+    if db.db_save_note(user_id, title, content):
+        await callback_query.answer("✅ Identitas berhasil disimpan ke Catatan!", show_alert=True)
+    else:
+        # If duplicate title or other error
+        # Try appending random digit if duplicate
+        title_alt = f"{title} ({random.randint(1,99)})"
+        if db.db_save_note(user_id, title_alt, content):
+             await callback_query.answer("✅ Tersimpan! (Judul disesuaikan)", show_alert=True)
+        else:
+             await callback_query.answer("⚠️ Gagal menyimpan. Cek kuota catatan Anda.", show_alert=True)
+
 
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('iban_gen_'))

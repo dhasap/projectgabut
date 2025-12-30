@@ -4,7 +4,6 @@ import requests
 import json
 import base64
 import random
-from faker import Faker
 
 # --- COUNTRY TO CURRENCY MAPPING ---
 COUNTRY_CURRENCY = {

@@ -1,0 +1,21 @@
+{
+  "reply_menu": [
+    {"label": "💳 BIN Check", "type": "core", "action": "bin", "row": 1},
+    {"label": "🎲 Rnd BIN", "type": "core", "action": "rnd", "row": 1},
+    {"label": "✅ Check CC", "type": "core", "action": "chk", "row": 1},
+    
+    {"label": "👤 Fake ID", "type": "core", "action": "fake", "row": 2},
+    {"label": "🏦 Fake IBAN", "type": "core", "action": "iban", "row": 2},
+    {"label": "⚙️ CC Gen", "type": "core", "action": "gen", "row": 2},
+    
+    {"label": "📧 Temp Mail", "type": "core", "action": "mail", "row": 3},
+    {"label": "📝 Notes", "type": "core", "action": "note", "row": 3},
+    
+    {"label": "👤 Info User", "type": "core", "action": "info", "row": 4},
+    {"label": "❓ Help & Menu", "type": "core", "action": "help", "row": 4}
+  ],
+  "admin_menu": [
+    {"label": "🔐 Admin Panel", "type": "core", "action": "admin", "row": 5}
+  ],
+  "inline_messages": {}
+}
