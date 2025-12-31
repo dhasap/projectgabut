@@ -2019,6 +2019,27 @@ async def process_dynamic_reply_button(message: types.Message, state: FSMContext
         await info(fake_msg)
     else:
         await message.reply("⚠️ Aksi tidak dikenal.")
+        await gen_mail(fake_msg)
+    elif action == 'note':
+        # Call notes menu directly
+        fake_msg = message
+        fake_msg.text = "/note"
+        await cmd_notes(fake_msg)
+    elif action == 'fake':
+        # Show fake ID menu
+        fake_msg = message
+        fake_msg.text = "/fake"
+        await fake_identity(fake_msg)
+    elif action == 'iban':
+        fake_msg = message
+        fake_msg.text = "/iban"
+        await cmd_iban(fake_msg)
+    elif action == 'info':
+        fake_msg = message
+        fake_msg.text = "/info"
+        await info(fake_msg)
+    else:
+        await message.reply("⚠️ Aksi tidak dikenal.")
 
 
 @dp.message_handler(commands=['info', 'id'], commands_prefix=PREFIX)

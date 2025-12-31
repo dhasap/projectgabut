@@ -4,15 +4,17 @@ import logging
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 CONFIG_FILE = 'menu_config.json'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(BASE_DIR, CONFIG_FILE)
 _CONFIG_CACHE = None
 
 def load_config():
     global _CONFIG_CACHE
     # Always reload for dev/debug, or implement TTL if needed
     try:
-        if not os.path.exists(CONFIG_FILE):
+        if not os.path.exists(CONFIG_PATH):
             return {"reply_menu": []}
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+        with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
             _CONFIG_CACHE = json.load(f)
     except Exception as e:
         logging.error(f"Error loading menu_config: {e}")
@@ -93,7 +95,7 @@ def delete_reply_button(label):
 
 def save_config(data):
     try:
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
     except Exception as e:
         logging.error(f"Error saving menu config: {e}")
