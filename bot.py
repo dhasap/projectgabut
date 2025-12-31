@@ -511,13 +511,15 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     await message.reply("✅ Operasi dibatalkan. Kembali ke mode normal.", reply_markup=menu_keyboard())
 @dp.message_handler(commands=['cancel', 'batal'], state="*")
 async def cancel_handler(message: types.Message, state: FSMContext):
-    """Global Cancel Handler."""
+    """Global Cancel Handler untuk reset state."""
     current_state = await state.get_state()
     if current_state is None:
-        return await message.reply("Tidak ada operasi yang sedang berjalan.")
+        await message.reply("Tidak ada operasi yang sedang berjalan.", reply_markup=menu_keyboard())
+        return
     
     await state.finish()
-    await message.reply("✅ Operasi dibatalkan. Kembali ke menu utama.", reply_markup=get_reply_keyboard(await is_owner(message.from_user.id)))
+    is_adm = await is_owner(message.from_user.id)
+    await message.reply("✅ Operasi dibatalkan. Kembali ke menu utama.", reply_markup=get_reply_keyboard(is_adm))
 
 @dp.callback_query_handler(lambda c: c.data in ['m_bin', 'm_chk', 'm_info', 'm_main', 'm_gen', 'm_mail', 'm_fake', 'm_rnd', 'm_iban'], state="*")
 async def process_callback_button(callback_query: types.CallbackQuery, state: FSMContext):
@@ -643,12 +645,12 @@ Contoh:
         )
     elif code == 'm_main':
         # Fix: Reply Keyboard must be sent via send_message, not edit_message
-        # We edit the inline message to say "Menu Utama" and then send the keyboard
         try:
             await bot.edit_message_text("👇 <b>Menu Utama</b> telah dibuka di bawah.", chat_id=user.id, message_id=callback_query.message.message_id, parse_mode=types.ParseMode.HTML)
         except: pass
         
         is_adm = await is_owner(user.id)
+        # Important: Send a NEW message to attach the Reply Keyboard
         await bot.send_message(user.id, "Silakan pilih menu:", reply_markup=get_reply_keyboard(is_adm))
         
         # FIX: Send Reply Keyboard separately to ensure it appears
@@ -822,23 +824,12 @@ async def cb_notes_list(call: types.CallbackQuery):
         text = "<b>📂 DAFTAR CATATAN ANDA</b>\nPilih catatan untuk membuka:"
         for n in notes:
             title = n.get('title', 'Untitled')
-            # Fallback for old schema if ID is missing (though migration should handle it)
-            # Actually db_get_notes_list needs update first. Assuming it returns 'id'.
-            # I will assume I updated database.py first or will do next.
-            # But wait, I can't assume. Let's check db_get_notes_list.
-            # It returns list of dicts. I need to make sure it includes 'id'.
-            # Current db_get_notes_list: SELECT title, updated_at...
-            # I need to change that first.
-            
-            # Use 'nr:{id}' format
             note_id = n.get('id')
-            if not note_id:
-                 # Fallback to title if id missing (old cache?)
-                 cb_data = f"note_read:{title}"
-            else:
+            
+            # Use 'nr:{id}' for robust callback data
+            if note_id:
                  cb_data = f"nr:{note_id}"
-                 
-            kb.add(types.InlineKeyboardButton(f"📄 {title}", callback_data=cb_data))
+                 kb.add(types.InlineKeyboardButton(f"📄 {title}", callback_data=cb_data))
         
         kb.add(types.InlineKeyboardButton("➕ Tambah", callback_data="note_add"))
     
@@ -917,16 +908,16 @@ async def cb_notes_read(call: types.CallbackQuery):
         if call.data.startswith('nr:'):
             identifier = call.data.split(':', 1)[1]
         else:
-            identifier = call.data.split(':', 1)[1]
+            identifier = call.data.split(':', 1)[1] # Fallback for old style if any
     except IndexError:
         return await call.answer("Error data.")
 
     data = await db.db_get_note_content(call.from_user.id, identifier)
     
-    kb = types.InlineKeyboardMarkup(row_width=2)
     # Use 'nd_ask:{id}' for delete ask
     del_data = f"nd_ask:{identifier}"
     
+    kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("🗑 Hapus", callback_data=del_data),
         types.InlineKeyboardButton("🔙 Kembali", callback_data="note_list")

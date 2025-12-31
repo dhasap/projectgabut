@@ -357,11 +357,11 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
         return True
 
     async def get_notes_list(self, user_id):
-        # Return ID and Title for efficient callbacks
-        return await self._exec("SELECT id, title FROM notes WHERE user_id = %s ORDER BY id DESC", (user_id,), fetch=True, dict_cursor=True) or []
+        # Select ID and Title explicitly for the menu
+        return await self._exec("SELECT id, title, updated_at FROM notes WHERE user_id = %s ORDER BY id DESC", (user_id,), fetch=True, dict_cursor=True) or []
 
     async def get_note_content(self, user_id, identifier):
-        # Identifier can be ID (integer) or Title (string)
+        # Identifier can be ID (int/digit str) or Title (str)
         if str(identifier).isdigit():
             row = await self._exec("SELECT content, title FROM notes WHERE user_id = %s AND id = %s", (user_id, identifier), fetch_one=True, dict_cursor=True)
         else:
@@ -372,7 +372,9 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
             try:
                 decrypted = cipher.decrypt(row['content'].encode()).decode()
                 return {"title": row['title'], "content": decrypted}
-            except: return None
+            except Exception as e:
+                logging.error(f"Decryption failed: {e}")
+                return {"title": row['title'], "content": "[Error: Gagal dekripsi catatan]"}
         return None
 
     async def delete_note(self, user_id, identifier):
