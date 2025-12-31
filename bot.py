@@ -2111,7 +2111,7 @@ async def rnd_bin(message: types.Message):
         
         # Primary API: HandyAPI
         try:
-            r = requests.get(f'https://data.handyapi.com/bin/{BIN}', timeout=10)
+            r = await asyncio.to_thread(requests.get, f'https://data.handyapi.com/bin/{BIN}', timeout=10)
             if r.status_code == 200:
                 data = r.json()
                 if data.get('Status') == 'SUCCESS' or 'Scheme' in data:
@@ -2161,7 +2161,7 @@ async def rnd_bin(message: types.Message):
         except: pass
 
         # Fallback API: Binlist
-        r = requests.get(
+        r = await asyncio.to_thread(requests.get, 
             f'https://lookup.binlist.net/{BIN}',
             headers={'Accept-Version': '3'},
             timeout=10
@@ -2237,13 +2237,22 @@ async def binio(message: types.Message):
             reply_markup=keyboard_markup
         )
     
+    # Cool loading message
+    loading_msg = await message.reply(
+        "<b>⚡ AZKURA BIN LOOKUP ⚡</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🔍 <b>BIN:</b> <code>{BIN[:6]}</code>\n"
+        "⌛ <b>Status:</b> <i>Fetching Data...</i>",
+        reply_markup=keyboard_markup
+    )
+
     # --- DUAL API STRATEGY ---
     data = None
     source = "Unknown"
     
     # 1. Try HandyAPI (Better Limits)
     try:
-        r = requests.get(f'https://data.handyapi.com/bin/{BIN[:6]}', timeout=5)
+        r = await asyncio.to_thread(requests.get, f'https://data.handyapi.com/bin/{BIN[:6]}', timeout=5)
         if r.status_code == 200:
             json_data = r.json()
             if json_data.get('Status') == 'SUCCESS' or 'Scheme' in json_data:
@@ -2254,16 +2263,16 @@ async def binio(message: types.Message):
     # 2. Try Binlist (Fallback) if Handy failed
     if not data:
         try:
-            r = requests.get(f'https://lookup.binlist.net/{BIN[:6]}', headers={'Accept-Version': '3'}, timeout=5)
+            r = await asyncio.to_thread(requests.get, f'https://lookup.binlist.net/{BIN[:6]}', headers={'Accept-Version': '3'}, timeout=5)
             if r.status_code == 200:
                 data = r.json()
                 source = "Binlist"
             elif r.status_code == 429:
-                return await message.reply('⚠️ <b>Limit API Habis.</b>\nSilakan coba beberapa saat lagi.')
+                return await loading_msg.edit_text('⚠️ <b>Limit API Habis.</b>\nSilakan coba beberapa saat lagi.', reply_markup=keyboard_markup)
         except: pass
 
     if not data:
-        return await message.reply(f'❌ <b>BIN {BIN[:6]} tidak ditemukan atau server sibuk.</b>', reply_markup=keyboard_markup)
+        return await loading_msg.edit_text(f'❌ <b>BIN {BIN[:6]} tidak ditemukan atau server sibuk.</b>', reply_markup=keyboard_markup)
 
     # --- PARSING ---
     if source == "Handy":
@@ -2320,7 +2329,7 @@ async def binio(message: types.Message):
 ━━━━━━━━━━━━━━━━━━
 <b>Checked by:</b> <a href="tg://user?id={ID}">{FIRST}</a>
 '''
-    await message.reply(INFO, reply_markup=keyboard_markup, disable_web_page_preview=True)
+    await loading_msg.edit_text(INFO, reply_markup=keyboard_markup, disable_web_page_preview=True)
 
 
 
@@ -2416,8 +2425,8 @@ async def ch(message: types.Message):
                 )
                 continue
                 
-            # --- CALL LOCAL CHECKER ---
-            res = local_chk_gate(ccn, mm, yy, cvv)
+            # --- CALL LOCAL CHECKER (NON-BLOCKING) ---
+            res = await asyncio.to_thread(local_chk_gate, ccn, mm, yy, cvv)
             
             # Parse Response
             bin_info = res.get("bin_info", "Unknown")
@@ -2565,6 +2574,15 @@ async def gen_cc(message: types.Message):
     cc_fmt = re.sub(r'[^0-9x]', '', cc_fmt)
     if not cc_fmt: return await message.reply("<b>Format BIN tidak valid.</b>")
 
+    # Cool loading message
+    loading_msg = await message.reply(
+        "<b>⚡ AZKURA VCC GENERATOR ⚡</b>\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"⚙️ <b>Origin:</b> {origin_type}\n"
+        f"💳 <b>Pattern:</b> <code>{cc_fmt}</code>\n"
+        "⌛ <b>Status:</b> <i>Generating Cards...</i>"
+    )
+
     # --- NETWORK-AWARE LOGIC ---
     target_len = 16 
     if cc_fmt.startswith(('34', '37')): target_len = 15
@@ -2648,7 +2666,7 @@ async def gen_cc(message: types.Message):
             generated_list.append(full_result)
 
     if not generated_list:
-        return await message.reply("⚠️ <b>Gagal generate.</b> Cek format BIN Anda.")
+        return await loading_msg.edit_text("⚠️ <b>Gagal generate.</b> Cek format BIN Anda.")
 
     # OUTPUT HANDLING
     # Jika hasil sedikit, kirim teks. Jika banyak, kirim file.
@@ -2659,7 +2677,7 @@ async def gen_cc(message: types.Message):
     
     if len(generated_list) <= 15:
         result_text = "\n".join(generated_list)
-        await message.reply(
+        await loading_msg.edit_text(
             f"<b>⚙️ AZKURA GEN ({origin_type})</b>\n"
             f"<b>Info:</b> {simple_info}\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -2680,6 +2698,7 @@ async def gen_cc(message: types.Message):
             f"<b>Total:</b> {len(generated_list)} CC\n"
             f"<i>File terlampir karena jumlah > 15</i>"
         )
+        await loading_msg.delete()
         await message.reply_document(file_bio, caption=caption)
 
 # --- MAIL.TM HELPERS (ASYNC) ---
@@ -3006,6 +3025,20 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
         mode = parts[2]
 
     saved = SAVED_MAILS.get(user_id, [])
+    
+    # AUTO-RESTORE LOGIC: Restore active session from DB if RAM is empty
+    if not saved:
+        db_sess = await asyncio.to_thread(db.db_get_mail_session, user_id)
+        if db_sess:
+             # Reconstruct session object matching SAVED_MAILS format
+             restored = {
+                 "email": db_sess['email'],
+                 "password": db_sess['password'],
+                 "token": db_sess['token']
+             }
+             SAVED_MAILS[user_id] = [restored]
+             saved = SAVED_MAILS[user_id]
+
     if not saved:
         return await callback_query.message.edit_text(
             "⚠️ <b>Belum ada riwayat email.</b>\nBuat dulu dengan opsi di menu Temp Mail.",
@@ -3024,7 +3057,8 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     end_idx = start_idx + MAX_PER_PAGE
     current_page_items = saved[start_idx:end_idx]
     
-    sess = db.db_get_mail_session(user_id)
+    # Get Active Session from DB
+    sess = await asyncio.to_thread(db.db_get_mail_session, user_id)
     current_email = sess['email'] if sess else ''
     
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -3127,6 +3161,19 @@ async def list_emails(message: types.Message):
     user_id = message.from_user.id
     saved = SAVED_MAILS.get(user_id, [])
     
+    # AUTO-RESTORE LOGIC
+    if not saved:
+        db_sess = await asyncio.to_thread(db.db_get_mail_session, user_id)
+        if db_sess:
+             # Reconstruct session object matching SAVED_MAILS format
+             restored = {
+                 "email": db_sess['email'],
+                 "password": db_sess['password'],
+                 "token": db_sess['token']
+             }
+             SAVED_MAILS[user_id] = [restored]
+             saved = SAVED_MAILS[user_id]
+    
     if not saved:
         return await message.reply("⚠️ <b>Belum ada riwayat email.</b>")
 
@@ -3141,7 +3188,8 @@ async def list_emails(message: types.Message):
     page = 0
     
     current_page_items = saved[0:MAX_PER_PAGE]
-    sess = db.db_get_mail_session(user_id)
+    
+    sess = await asyncio.to_thread(db.db_get_mail_session, user_id)
     current_email = sess['email'] if sess else ''
     
     kb = types.InlineKeyboardMarkup(row_width=1)
