@@ -2793,9 +2793,8 @@ async def gen_mail(message: types.Message):
             # Update Cooldown
             USER_MAIL_COOLDOWN[user_id] = time.time()
             
-            # Save to DB
-            db.db_save_mail_session(user_id, email, password, token)
-            save_email_session(user_id, email, password, token)
+            # Save to DB and RAM
+            await save_email_session(user_id, email, password, token)
             
             kb = types.InlineKeyboardMarkup(row_width=2)
             kb.add(types.InlineKeyboardButton("📩 Cek Inbox (0)", callback_data="refresh_mail"))
@@ -2834,12 +2833,11 @@ async def login_mail(message: types.Message):
     email, password = args[0], args[1]
     
     # Try to get token
-    token = get_mail_token(email, password)
+    token = await get_mail_token(email, password)
     
     if token:
-        # Save to DB
-        db.db_save_mail_session(user_id, email, password, token)
-        save_email_session(user_id, email, password, token)
+        # Save to DB and RAM
+        await save_email_session(user_id, email, password, token)
         
         kb = types.InlineKeyboardMarkup(row_width=2)
         kb.add(types.InlineKeyboardButton("📩 Cek Inbox", callback_data="refresh_mail"))
@@ -2963,8 +2961,7 @@ async def execute_custom_mail(message: types.Message, state: FSMContext, passwor
             USER_MAIL_COOLDOWN[user_id] = time.time()
             
             # Save
-            db.db_save_mail_session(user_id, email, password, token)
-            save_email_session(user_id, email, password, token)
+            await save_email_session(user_id, email, password, token)
             
             kb = types.InlineKeyboardMarkup(row_width=2)
             kb.add(types.InlineKeyboardButton("📩 Cek Inbox (0)", callback_data="refresh_mail"))
