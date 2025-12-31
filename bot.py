@@ -1622,7 +1622,8 @@ async def back_to_admin_handler(message: types.Message, state: FSMContext):
 
 @dp.message_handler(lambda m: m.text == "Reply Editor", state="*")
 async def reply_editor_menu(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins():
+        return
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -1786,7 +1787,8 @@ async def reply_del_action(call: types.CallbackQuery):
 
 @dp.message_handler(lambda m: m.text == "Inline Editor", state="*")
 async def inline_editor_menu(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins():
+        return
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -2746,7 +2748,8 @@ async def gen_mail(message: types.Message):
     # SECURITY: Cooldown 30 Seconds
     user_id = message.from_user.id
     last_gen = USER_MAIL_COOLDOWN.get(user_id, 0)
-    if time.time() - last_gen < 30 and user_id not in get_admins():
+    admins = await get_admins()
+    if time.time() - last_gen < 30 and user_id not in admins:
         return await message.reply("⏳ <b>Cooldown!</b>\nMohon tunggu 30 detik sebelum membuat email baru lagi.")
 
     await message.answer_chat_action('typing')
@@ -2931,7 +2934,8 @@ async def execute_custom_mail(message: types.Message, state: FSMContext, passwor
     # SECURITY: Cooldown
     user_id = message.chat.id
     last_gen = USER_MAIL_COOLDOWN.get(user_id, 0)
-    if time.time() - last_gen < 30 and user_id not in get_admins():
+    admins = await get_admins()
+    if time.time() - last_gen < 30 and user_id not in admins:
         await state.finish()
         return await message.reply("⏳ <b>Cooldown!</b>\nTunggu 30 detik sebelum membuat email baru.")
 
@@ -3595,6 +3599,8 @@ async def check_single_mail(data, now):
         await db.db_update_mail_check_time(user_id, now + 300)
 
 async def on_startup(dp):
+    await db.init_db()
+    await load_bot_state()
     # Try to set commands with retry logic
     for i in range(10):
         try:
