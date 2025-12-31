@@ -7,7 +7,22 @@ import random
 import yaml
 import asyncio
 import re
+import socket # Added for network fix
+import aiohttp # Added for network fix
 from datetime import datetime
+
+# --- NETWORK FIX: FORCE IPV4 ---
+# Masalah: Railway/Docker sering gagal konek ke Telegram via IPv6 (Network is unreachable)
+# Solusi: Paksa aiohttp (yang dipakai aiogram) untuk hanya menggunakan IPv4
+old_connector_init = aiohttp.TCPConnector.__init__
+
+def new_connector_init(self, *args, **kwargs):
+    # Paksa family menjadi AF_INET (IPv4)
+    kwargs['family'] = socket.AF_INET
+    old_connector_init(self, *args, **kwargs)
+
+aiohttp.TCPConnector.__init__ = new_connector_init
+# -------------------------------
 
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.utils.exceptions import Throttled
