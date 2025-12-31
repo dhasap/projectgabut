@@ -651,8 +651,8 @@ Selamat datang di <b>{BOT_NAME}</b> — asistennya cek kartu & BIN yang cepat da
 
 @dp.message_handler(commands=['start', 'help'], commands_prefix=PREFIX)
 async def helpstr(message: types.Message):
-    # Log user Async
-    await save_user(message.from_user)
+    # Log user Async (Background)
+    asyncio.create_task(save_user(message.from_user))
     
     # Handle deep linking arguments (e.g. /start bin)
     args = message.get_args()

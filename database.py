@@ -318,7 +318,8 @@ class MySQLAdapter(DatabaseAdapter):
             'user': user,
             'password': password,
             'database': db_name,
-            'autocommit': True
+            'autocommit': True,
+            'connect_timeout': 5
         }
         if ssl_ca and os.path.exists(ssl_ca):
             self.db_config['ssl_ca'] = ssl_ca
