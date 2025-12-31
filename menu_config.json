@@ -1,21 +1,53 @@
 {
   "reply_menu": [
-    {"label": "💳 BIN Check", "type": "core", "action": "bin", "row": 1},
-    {"label": "🎲 Rnd BIN", "type": "core", "action": "rnd", "row": 1},
-    {"label": "✅ Check CC", "type": "core", "action": "chk", "row": 1},
-    
-    {"label": "👤 Fake ID", "type": "core", "action": "fake", "row": 2},
-    {"label": "🏦 Fake IBAN", "type": "core", "action": "iban", "row": 2},
-    {"label": "⚙️ CC Gen", "type": "core", "action": "gen", "row": 2},
-    
-    {"label": "📧 Temp Mail", "type": "core", "action": "mail", "row": 3},
-    {"label": "📝 Notes", "type": "core", "action": "note", "row": 3},
-    
-    {"label": "👤 Info User", "type": "core", "action": "info", "row": 4},
-    {"label": "❓ Help & Menu", "type": "core", "action": "help", "row": 4}
+    {
+      "label": "💳 Checker",
+      "action": "chk",
+      "row": 1,
+      "type": "action"
+    },
+    {
+      "label": "⚙️ Generator",
+      "action": "gen",
+      "row": 1,
+      "type": "action"
+    },
+    {
+      "label": "📧 Temp Mail",
+      "action": "mail",
+      "row": 2,
+      "type": "action"
+    },
+    {
+      "label": "📝 Notes",
+      "action": "note",
+      "row": 2,
+      "type": "action"
+    },
+    {
+      "label": "👤 Fake ID",
+      "action": "fake",
+      "row": 3,
+      "type": "action"
+    },
+    {
+      "label": "ℹ️ Info",
+      "action": "info",
+      "row": 3,
+      "type": "action"
+    }
   ],
   "admin_menu": [
-    {"label": "🔐 Admin Panel", "type": "core", "action": "admin", "row": 5}
+    {
+      "label": "📊 Stats",
+      "action": "admin_stats",
+      "row": 1
+    },
+    {
+      "label": "🔙 Exit Admin",
+      "action": "admin_exit",
+      "row": 2
+    }
   ],
   "inline_messages": {}
 }

@@ -984,6 +984,7 @@ async def cmd_notes(message: types.Message):
     # Split: /note [action] [rest]
     args = message.text.split(maxsplit=2)
     
+    # If called from menu button (text="/note" or just "/note"), treat as list or menu
     if len(args) < 2:
         return await show_notes_menu(message.chat.id)
         
@@ -1950,25 +1951,27 @@ async def show_linked_message(call: types.CallbackQuery):
 
 @dp.message_handler(lambda message: menu_manager.get_action_by_label(message.text) is not None, state="*")
 async def process_dynamic_reply_button(message: types.Message, state: FSMContext):
-    await state.finish()
-    """Handler dinamis untuk tombol Reply Keyboard."""
+    """Handler dinamis untuk tombol Reply Keyboard (Routing Utama)."""
+    await state.finish() # Reset state agar tidak nyangkut
+    
     text = message.text
     btn_data = menu_manager.get_action_by_label(text)
     
     if not btn_data:
-        return # Should not happen due to filter
+        return
         
+    logging.info(f"🔘 Menu Clicked: {text} -> {btn_data}")
+    
+    action = btn_data.get('action')
     b_type = btn_data.get('type', 'text')
     
-    # 1. Handle Text Response (Custom Buttons)
+    # 1. Handle Custom Text Response
     if b_type == 'text':
-        response = btn_data.get('response', 'No response set.')
-        # Support variable replacement
+        response = btn_data.get('response', 'No response.')
         response = response.replace('{first_name}', message.from_user.first_name or "")
         response = response.replace('{username}', message.from_user.username or "")
         response = response.replace('{id}', str(message.from_user.id))
         
-        # Handle Inline Buttons if any
         kb = None
         inline_data = btn_data.get('inline_buttons')
         if inline_data:
@@ -1986,121 +1989,45 @@ async def process_dynamic_reply_button(message: types.Message, state: FSMContext
         await message.reply(response, reply_markup=kb, parse_mode=types.ParseMode.HTML, disable_web_page_preview=True)
         return
 
-    # 2. Handle Core Actions (Built-in Features)
-    action = btn_data.get('action')
-    
-    # Check Disabled Features
+    # 2. Handle Core Actions
     if action in BOT_STATE["disabled_features"]:
         return await message.reply("⚠️ <b>Fitur ini sedang dimatikan sementara oleh Admin.</b>")
 
     if action == 'admin':
         await admin_panel(message)
-        
+    elif action == 'chk':
+        # Show help for checker
+        await message.reply("<b>💳 CC Checker</b>\nSilakan kirim kartu dengan format: <code>cc|mm|yy|cvv</code>\nAtau gunakan perintah <code>/chk</code>.")
+    elif action == 'gen':
+        # Show help for generator
+        await message.reply("<b>⚙️ VCC Generator</b>\nGunakan perintah <code>/gen BIN</code> (contoh: <code>/gen 454141</code>).")
     elif action == 'bin':
-        await message.reply(
-            "<b>💳 BIN LOOKUP & INFO</b>\n"
-            "Fitur untuk mengecek detail informasi Bank Identification Number (BIN).\n\n"
-            "<b>Apa yang ditampilkan?</b>\n"
-            "• 🏦 Nama Bank & Website\n"
-            "• 🌍 Negara & Mata Uang\n"
-            "• 💳 Tipe Kartu (Debit/Credit) & Level\n\n"
-            "<b>Cara Penggunaan:</b>\n"
-            "Ketik perintah di bawah ini:\n"
-            "<code>/bin 451234</code>\n\n"
-            "<i>Tips: Masukkan 6 digit pertama kartu.</i>"
-        )
-    elif action == 'rnd':
-        await rnd_bin(message)
+        await message.reply("<b>🔍 BIN Lookup</b>\nKirim perintah <code>/bin 454141</code> untuk cek.")
+    elif action == 'mail':
+        # Call mail menu directly
+        fake_msg = message
+        fake_msg.text = "/mail"
+        await gen_mail(fake_msg)
     elif action == 'note':
-        # Fake command call
+        # Call notes menu directly
         fake_msg = message
         fake_msg.text = "/note"
         await cmd_notes(fake_msg)
-    elif action == 'chk':
-        await message.reply(
-            "<b>✅ LIVE CC CHECKER</b>\n"
-            "Validasi kartu kredit/debit secara akurat (Auth/Charge).\n\n"
-            "<b>Fitur Unggulan:</b>\n"
-            "• ⚡ Cek Massal (Max 50)\n"
-            "• 🔍 Deteksi Level & Bank\n"
-            "• 🛡️ Anti-Duplicate & Rate Limit\n\n"
-            "<b>Cara Penggunaan:</b>\n"
-            "1. <b>Manual:</b> Ketik <code>/chk cc|mm|yy|cvv</code>\n"
-            "2. <b>Massal:</b> Reply file/pesan list kartu dengan <code>/chk</code>\n\n"
-            "<i>Format: 0000000000000000|01|25|000</i>"
-        )
-    elif action == 'iban':
-         kb = types.InlineKeyboardMarkup(row_width=3)
-         countries = list(iban.FAKEIBAN_COUNTRIES.items())
-         btns = []
-         for c_code, c_name in countries:
-             flag_offset = 127397
-             try:
-                flag = chr(ord(c_code[0].upper()) + flag_offset) + chr(ord(c_code[1].upper()) + flag_offset)
-             except: flag = "🏳️"
-             label = f"{flag} {c_code.upper()}"
-             btns.append(types.InlineKeyboardButton(label, callback_data=f"iban_gen_{c_code}"))
-         kb.add(*btns)
-         await message.reply("<b>🏦 FAKE IBAN GENERATOR</b>\nPilih negara:", reply_markup=kb)
-         
     elif action == 'fake':
-        kb = types.InlineKeyboardMarkup(row_width=4)
-        countries = [
-            ("🇺🇸 US", "us"), ("🇮🇩 ID", "id"), ("🇯🇵 JP", "jp"), ("🇰🇷 KR", "kr"),
-            ("🇬🇧 UK", "uk"), ("🇸🇬 SG", "sg"), ("🇧🇷 BR", "br"), ("🇮🇳 IN", "in"),
-            ("🇩🇪 DE", "de"), ("🇫🇷 FR", "fr"), ("🇪🇸 ES", "es"), ("🇮🇹 IT", "it"),
-            ("🇨🇳 CN", "cn"), ("🇷🇺 RU", "ru"), ("🇨🇦 CA", "ca"), ("🇦🇺 AU", "au"),
-            ("🇳🇱 NL", "nl"), ("🇹🇷 TR", "tr"), ("🇵🇱 PL", "pl"), ("🇺🇦 UA", "ua"),
-            ("🇲🇾 MY", "my"), ("🇻🇳 VN", "vn"), ("🇹🇭 TH", "th"), ("🇵🇭 PH", "ph")
-        ]
-        btns = [types.InlineKeyboardButton(name, callback_data=f"fake_{code}") for name, code in countries]
-        kb.add(*btns)
-        await message.reply("<b>👤 FAKE ID GENERATOR</b>\nPilih negara target:", reply_markup=kb)
-        
-    elif action == 'mail':
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.row(
-            types.InlineKeyboardButton("🎲 Buat Random", callback_data="m_mail_create"),
-            types.InlineKeyboardButton("✍️ Buat Custom", callback_data="m_mail_custom")
-        )
-        kb.row(
-            types.InlineKeyboardButton("📩 Cek Inbox", callback_data="refresh_mail"),
-            types.InlineKeyboardButton("📋 List Akun", callback_data="m_mail_list")
-        )
-        kb.add(types.InlineKeyboardButton("🔑 Login Akun Lama", callback_data="m_mail_login"))
-        
-        await message.reply(
-            "<b>📧 LAYANAN TEMP MAIL PREMIUM</b>\n"
-            "Buat email sementara instan untuk verifikasi & privasi.\n\n"
-            "<b>Fitur Unggulan:</b>\n"
-            "• ⚡ <b>Instan:</b> Email langsung aktif.\n"
-            "• 📬 <b>Live Inbox:</b> Pesan masuk otomatis.\n"
-            "• 🔐 <b>Aman:</b> Lindungi email utama Anda dari spam.\n\n"
-            "<i>Silakan pilih menu operasi di bawah ini:</i>",
-            reply_markup=kb
-        )
-        
-    elif action == 'gen':
-        await message.reply(
-            "<b>⚙️ VCC GENERATOR PRO</b>\n"
-            "Buat nomor kartu valid (Luhn Algorithm) untuk keperluan testing.\n\n"
-            "<b>Fitur Generator:</b>\n"
-            "• 🔢 Algoritma Luhn (100% Valid)\n"
-            "• 🌍 Auto Country Mode\n"
-            "• 📄 Output File (Jika > 15)\n\n"
-            "<b>Panduan Perintah:</b>\n"
-            "• <b>Manual:</b> <code>/gen 454141</code>\n"
-            "• <b>Lengkap:</b> <code>/gen 454141|xx|xx|xxx</code>\n"
-            "• <b>Otomatis:</b> <code>/gen id</code> (Negara)\n"
-            "• <b>Massal:</b> <code>/gen 454141 50</code> (Jumlah)\n\n"
-            "<i>Contoh: /gen us 20</i>"
-        )
+        # Show fake ID menu
+        fake_msg = message
+        fake_msg.text = "/fake"
+        await fake_identity(fake_msg)
+    elif action == 'iban':
+        fake_msg = message
+        fake_msg.text = "/iban"
+        await cmd_iban(fake_msg)
     elif action == 'info':
-        await info(message)
-    elif action == 'help':
-        fake_message = message
-        fake_message.text = "/help"
-        await helpstr(fake_message)
+        fake_msg = message
+        fake_msg.text = "/info"
+        await info(fake_msg)
+    else:
+        await message.reply("⚠️ Aksi tidak dikenal.")
 
 
 @dp.message_handler(commands=['info', 'id'], commands_prefix=PREFIX)
