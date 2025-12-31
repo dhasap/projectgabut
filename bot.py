@@ -143,6 +143,27 @@ TEMP_BANNED = {}     # {user_id: expiry_timestamp}
 VIOLATION_LIMIT = 5  # Max spam
 BAN_DURATION = 600   # 10 Menit
 
+# --- NON-BLOCKING SECURITY CACHE ---
+LOCAL_BANNED_CACHE = set()
+LOCAL_ADMINS_CACHE = {OWNER}
+
+async def refresh_security_cache():
+    """Background task to refresh security cache without blocking main loop."""
+    global LOCAL_BANNED_CACHE, LOCAL_ADMINS_CACHE
+    while True:
+        try:
+            # Run blocking DB calls in executor
+            banned = await loop.run_in_executor(None, db.db_get_banned)
+            admins = await loop.run_in_executor(None, lambda: db.db_get_admins(OWNER))
+            
+            if banned is not None: LOCAL_BANNED_CACHE = banned
+            if admins is not None: LOCAL_ADMINS_CACHE = admins
+            
+        except Exception as e:
+            logging.error(f"Security cache refresh failed: {e}")
+        
+        await asyncio.sleep(60) # Refresh every 1 minute
+
 class AccessMiddleware(BaseMiddleware):
     """Middleware: Auto-Ban, Rate Limit, Ban, Maintenance, Force Sub."""
     
@@ -150,44 +171,12 @@ class AccessMiddleware(BaseMiddleware):
         user_id = message.from_user.id
         current_time = time.time()
         
-        # 0. CEK TEMP BAN (Hukuman Otomatis)
-        # Jika user sedang dihukum, tolak semua request tanpa proses apapun (Hemat CPU)
-        if user_id in TEMP_BANNED:
-            if current_time < TEMP_BANNED[user_id]:
-                raise CancelHandler()
-            else:
-                # Hukuman selesai
-                del TEMP_BANNED[user_id]
-                if user_id in USER_VIOLATIONS: del USER_VIOLATIONS[user_id]
-        
-        # 1. RATE LIMITING (RAM - Ultra Fast)
-        if len(USER_THROTTLE) > 2000: USER_THROTTLE.clear()
-        
-        last_time = USER_THROTTLE.get(user_id, 0)
-        if current_time - last_time < THROTTLE_TIME:
-            # SPAM DETECTED
-            USER_VIOLATIONS[user_id] = USER_VIOLATIONS.get(user_id, 0) + 1
-            
-            # Jika sudah melanggar 5x berturut-turut -> BANNED 10 MENIT
-            if USER_VIOLATIONS[user_id] >= VIOLATION_LIMIT:
-                TEMP_BANNED[user_id] = current_time + BAN_DURATION
-                # Kita tidak kirim notifikasi agar tidak membebani bot (Silent Ban)
-            
-            raise CancelHandler()
-        
-        USER_THROTTLE[user_id] = current_time
-        
-        # Reward Good Behavior: Kurangi violation count jika user normal
-        if user_id in USER_VIOLATIONS and USER_VIOLATIONS[user_id] > 0:
-             USER_VIOLATIONS[user_id] -= 1
-        
-        # 2. CEK BANNED (RAM Cache - Fast)
-        # Menggunakan set lookup (O(1)) dari cache database
-        if str(user_id) in get_banned_users():
+        # 2. CEK BANNED (RAM Cache - Non-Blocking)
+        if str(user_id) in LOCAL_BANNED_CACHE:
              raise CancelHandler()
              
-        # Pre-fetch Admin Status (RAM Cache - Fast)
-        is_admin = (user_id == OWNER) or (user_id in get_admins())
+        # Pre-fetch Admin Status (RAM Cache - Non-Blocking)
+        is_admin = (user_id == OWNER) or (user_id in LOCAL_ADMINS_CACHE)
 
         # 3. CEK MAINTENANCE
         if BOT_STATE["maintenance"] and not is_admin:
@@ -195,14 +184,11 @@ class AccessMiddleware(BaseMiddleware):
             raise CancelHandler()
 
         # 4. FORCE SUBSCRIBE (API Call - Slowest, executed last)
-        # Skip untuk Admin atau Group Chat
         if message.chat.type == 'private' and not is_admin:
-            # Cek Cache Lokal (Valid 300 detik)
             if user_id not in FORCE_SUB_CACHE or current_time > FORCE_SUB_CACHE[user_id]:
                 try:
                     member = await bot.get_chat_member(FORCE_SUB_CHANNEL, user_id)
                     if member.status in ['left', 'kicked']:
-                        # UI Force Sub
                         kb = types.InlineKeyboardMarkup()
                         kb.add(types.InlineKeyboardButton("🚀 GABUNG CHANNEL", url=f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"))
                         kb.add(types.InlineKeyboardButton("🔄 CEK STATUS", callback_data="check_sub"))
@@ -220,10 +206,8 @@ class AccessMiddleware(BaseMiddleware):
                         await message.answer(text, reply_markup=kb)
                         raise CancelHandler()
                     else:
-                        # Cache status "Joined"
                         FORCE_SUB_CACHE[user_id] = current_time + 300
                 except Exception:
-                    # Loloskan jika bot error/bukan admin channel
                     pass
 
         # 5. SPY MODE CHECK
@@ -2698,52 +2682,60 @@ async def gen_cc(message: types.Message):
         )
         await message.reply_document(file_bio, caption=caption)
 
-# --- MAIL.TM HELPERS ---
+# --- MAIL.TM HELPERS (ASYNC) ---
 
-def get_mail_domains():
+async def get_mail_domains():
     try:
-        r = requests.get("https://api.mail.tm/domains")
-        if r.status_code == 200:
-            return r.json().get("hydra:member", [])
-    except:
-        pass
+        async with aiohttp.ClientSession() as session:
+            async with session.get("https://api.mail.tm/domains") as r:
+                if r.status == 200:
+                    data = await r.json()
+                    return data.get("hydra:member", [])
+    except Exception as e:
+        logging.error(f"Mail.tm domain error: {e}")
     return []
 
-def create_mail_account(email, password):
+async def create_mail_account(email, password):
     try:
-        payload = {"address": email, "password": password}
-        r = requests.post("https://api.mail.tm/accounts", json=payload)
-        return r.status_code in [200, 201]
-    except:
+        async with aiohttp.ClientSession() as session:
+            payload = {"address": email, "password": password}
+            async with session.post("https://api.mail.tm/accounts", json=payload) as r:
+                return r.status in [200, 201]
+    except Exception as e:
+        logging.error(f"Mail.tm create error: {e}")
         return False
 
-def get_mail_token(email, password):
+async def get_mail_token(email, password):
     try:
-        payload = {"address": email, "password": password}
-        r = requests.post("https://api.mail.tm/token", json=payload)
-        if r.status_code == 200:
-            return r.json().get("token")
-    except:
-        pass
+        async with aiohttp.ClientSession() as session:
+            payload = {"address": email, "password": password}
+            async with session.post("https://api.mail.tm/token", json=payload) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    return data.get("token")
+    except Exception as e:
+        logging.error(f"Mail.tm token error: {e}")
     return None
 
-def get_mail_messages(token):
+async def get_mail_messages(token):
     try:
-        headers = {"Authorization": f"Bearer {token}"}
-        r = requests.get("https://api.mail.tm/messages", headers=headers)
-        if r.status_code == 200:
-            return r.json().get("hydra:member", [])
+        async with aiohttp.ClientSession() as session:
+            headers = {"Authorization": f"Bearer {token}"}
+            async with session.get("https://api.mail.tm/messages", headers=headers) as r:
+                if r.status == 200:
+                    data = await r.json()
+                    return data.get("hydra:member", [])
     except:
         pass
     return None
 
 @dp.message_handler(commands=['mail'], commands_prefix=PREFIX)
 async def gen_mail(message: types.Message):
-    # SECURITY: Cooldown 2 Minutes
+    # SECURITY: Cooldown 30 Seconds
     user_id = message.from_user.id
     last_gen = USER_MAIL_COOLDOWN.get(user_id, 0)
-    if time.time() - last_gen < 120 and user_id not in get_admins():
-        return await message.reply("⏳ <b>Cooldown!</b>\nMohon tunggu 2 menit sebelum membuat email baru lagi.")
+    if time.time() - last_gen < 30 and user_id not in get_admins():
+        return await message.reply("⏳ <b>Cooldown!</b>\nMohon tunggu 30 detik sebelum membuat email baru lagi.")
 
     await message.answer_chat_action('typing')
     
@@ -2758,7 +2750,7 @@ async def gen_mail(message: types.Message):
         custom_pass = args[2]
         
     # 1. Get Domain
-    domains = get_mail_domains()
+    domains = await get_mail_domains()
     if not domains:
         return await message.reply("⚠️ <b>Gagal mengambil domain email. Coba lagi nanti.</b>")
     
@@ -2782,9 +2774,9 @@ async def gen_mail(message: types.Message):
         password = "Pwd" + ''.join(random.choices(string.ascii_letters + string.digits, k=8))
     
     # 4. Create Account
-    if create_mail_account(email, password):
+    if await create_mail_account(email, password):
         # 5. Get Token
-        token = get_mail_token(email, password)
+        token = await get_mail_token(email, password)
         if token:
             # Update Cooldown
             USER_MAIL_COOLDOWN[user_id] = time.time()
@@ -2929,9 +2921,9 @@ async def execute_custom_mail(message: types.Message, state: FSMContext, passwor
     # SECURITY: Cooldown
     user_id = message.chat.id
     last_gen = USER_MAIL_COOLDOWN.get(user_id, 0)
-    if time.time() - last_gen < 120 and user_id not in get_admins():
+    if time.time() - last_gen < 30 and user_id not in get_admins():
         await state.finish()
-        return await message.reply("⏳ <b>Cooldown!</b>\nTunggu 2 menit sebelum membuat email baru.")
+        return await message.reply("⏳ <b>Cooldown!</b>\nTunggu 30 detik sebelum membuat email baru.")
 
     data = await state.get_data()
     username = data['username']
@@ -2941,7 +2933,7 @@ async def execute_custom_mail(message: types.Message, state: FSMContext, passwor
         password = "Pwd" + ''.join(random.choices(string.ascii_letters + string.digits, k=8))
         
     # Get Domain
-    domains = get_mail_domains()
+    domains = await get_mail_domains()
     if not domains:
         await state.finish()
         return await message.reply("⚠️ <b>Gagal mengambil domain email. Coba lagi nanti.</b>")
@@ -2952,8 +2944,8 @@ async def execute_custom_mail(message: types.Message, state: FSMContext, passwor
     await message.answer_chat_action('typing')
     
     # Create Account
-    if create_mail_account(email, password):
-        token = get_mail_token(email, password)
+    if await create_mail_account(email, password):
+        token = await get_mail_token(email, password)
         if token:
             # Update Cooldown
             USER_MAIL_COOLDOWN[user_id] = time.time()
@@ -3317,7 +3309,7 @@ async def fake_identity(message: types.Message):
         password = data['password']
         
         # Try to register to Mail.tm
-        domains = get_mail_domains()
+        domains = await get_mail_domains()
         token = None
         email_status = "🔴 Offline"
         
@@ -3330,8 +3322,8 @@ async def fake_identity(message: types.Message):
             # Update data dictionary
             data['email'] = email_addr
             
-            if create_mail_account(email_addr, password):
-                token = get_mail_token(email_addr, password)
+            if await create_mail_account(email_addr, password):
+                token = await get_mail_token(email_addr, password)
                 if token:
                     db.db_save_mail_session(user_id, email_addr, password, token)
                     save_email_session(user_id, email_addr, password, token)
@@ -3497,7 +3489,7 @@ async def auto_check_mail():
                 token = data.get('token')
                 last_id = data.get('last_msg_id')
                 
-                msgs = get_mail_messages(token)
+                msgs = await get_mail_messages(token)
                 if msgs and len(msgs) > 0:
                     newest_msg = msgs[0] # First item is newest
                     newest_id = newest_msg.get('id')
@@ -3543,8 +3535,9 @@ async def on_startup(dp):
             logging.error(f"Network error on startup (Attempt {i+1}/10): {e}")
             await asyncio.sleep(5)
     
-    # Start background task
+    # Start background tasks
     asyncio.create_task(auto_check_mail())
+    asyncio.create_task(refresh_security_cache())
 
 if __name__ == '__main__':
     initialize_bot_info()

@@ -3,17 +3,28 @@ import os
 from aiogram import types
 
 CONFIG_FILE = 'menu_config.json'
+_CONFIG_CACHE = None
 
 def load_config():
+    global _CONFIG_CACHE
+    if _CONFIG_CACHE is not None:
+        return _CONFIG_CACHE
+
     if not os.path.exists(CONFIG_FILE):
-        return {"reply_menu": [], "inline_messages": {}}
+        _CONFIG_CACHE = {"reply_menu": [], "inline_messages": {}}
+        return _CONFIG_CACHE
+
     try:
         with open(CONFIG_FILE, 'r') as f:
-            return json.load(f)
+            _CONFIG_CACHE = json.load(f)
     except:
-        return {"reply_menu": [], "inline_messages": {}}
+        _CONFIG_CACHE = {"reply_menu": [], "inline_messages": {}}
+    
+    return _CONFIG_CACHE
 
 def save_config(data):
+    global _CONFIG_CACHE
+    _CONFIG_CACHE = data # Update cache
     with open(CONFIG_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
