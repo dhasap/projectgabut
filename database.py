@@ -357,17 +357,28 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
         return True
 
     async def get_notes_list(self, user_id):
-        return await self._exec("SELECT title, updated_at FROM notes WHERE user_id = %s", (user_id,), fetch=True, dict_cursor=True) or []
+        return await self._exec("SELECT id, title, updated_at FROM notes WHERE user_id = %s", (user_id,), fetch=True, dict_cursor=True) or []
 
-    async def get_note_content(self, user_id, title):
-        row = await self._exec("SELECT content FROM notes WHERE user_id = %s AND title = %s", (user_id, title), fetch_one=True)
+    async def get_note_content(self, user_id, identifier):
+        # Identifier can be ID (int/digit str) or Title (str)
+        if str(identifier).isdigit():
+            row = await self._exec("SELECT content, title FROM notes WHERE user_id = %s AND id = %s", (user_id, identifier), fetch_one=True, dict_cursor=True)
+        else:
+            row = await self._exec("SELECT content, title FROM notes WHERE user_id = %s AND title = %s", (user_id, identifier), fetch_one=True, dict_cursor=True)
+            
         if row:
             cipher = _get_cipher_suite()
-            return cipher.decrypt(row[0].encode()).decode()
+            try:
+                decrypted = cipher.decrypt(row['content'].encode()).decode()
+                return {"title": row['title'], "content": decrypted}
+            except: return None
         return None
 
-    async def delete_note(self, user_id, title):
-        affected = await self._exec("DELETE FROM notes WHERE user_id = %s AND title = %s", (user_id, title))
+    async def delete_note(self, user_id, identifier):
+        if str(identifier).isdigit():
+            affected = await self._exec("DELETE FROM notes WHERE user_id = %s AND id = %s", (user_id, identifier))
+        else:
+            affected = await self._exec("DELETE FROM notes WHERE user_id = %s AND title = %s", (user_id, identifier))
         return affected and affected > 0
 
     # --- MAIL SESSIONS (ADAPTIVE) ---

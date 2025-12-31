@@ -501,6 +501,14 @@ async def check_sub_callback(callback_query: types.CallbackQuery):
         except: pass
 
 
+@dp.message_handler(commands=['cancel', 'batal'], state="*")
+async def cancel_handler(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+    
+    await state.finish()
+    await message.reply("✅ Operasi dibatalkan. Kembali ke mode normal.", reply_markup=menu_keyboard())
 @dp.callback_query_handler(lambda c: c.data in ['m_bin', 'm_chk', 'm_info', 'm_main', 'm_gen', 'm_mail', 'm_fake', 'm_rnd', 'm_iban'], state="*")
 async def process_callback_button(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
@@ -650,6 +658,10 @@ Selamat datang di <b>{BOT_NAME}</b> — asistennya cek kartu & BIN yang cepat da
         # Since this is a callback (edit), we just edit the message content. 
         # User usually already has the Reply Keyboard from /start.
         await bot.edit_message_text(MSG, chat_id=user.id, message_id=callback_query.message.message_id, reply_markup=keyboard_markup, parse_mode=types.ParseMode.HTML, disable_web_page_preview=True)
+        
+        # FIX: Send Reply Keyboard separately to ensure it appears
+        is_adm = await is_owner(user.id)
+        await bot.send_message(user.id, "👇 <b>Menu Utama</b>", reply_markup=get_reply_keyboard(is_adm))
 
 
 @dp.message_handler(commands=['start', 'help'], commands_prefix=PREFIX, state="*")
@@ -817,11 +829,23 @@ async def cb_notes_list(call: types.CallbackQuery):
     else:
         text = "<b>📂 DAFTAR CATATAN ANDA</b>\nPilih catatan untuk membuka:"
         for n in notes:
-            title = n['title']
-            cb_data = f"note_read:{title}"
-            # Safety check for length
-            if len(cb_data) > 64:
-                 pass
+            title = n.get('title', 'Untitled')
+            # Fallback for old schema if ID is missing (though migration should handle it)
+            # Actually db_get_notes_list needs update first. Assuming it returns 'id'.
+            # I will assume I updated database.py first or will do next.
+            # But wait, I can't assume. Let's check db_get_notes_list.
+            # It returns list of dicts. I need to make sure it includes 'id'.
+            # Current db_get_notes_list: SELECT title, updated_at...
+            # I need to change that first.
+            
+            # Use 'nr:{id}' format
+            note_id = n.get('id')
+            if not note_id:
+                 # Fallback to title if id missing (old cache?)
+                 cb_data = f"note_read:{title}"
+            else:
+                 cb_data = f"nr:{note_id}"
+                 
             kb.add(types.InlineKeyboardButton(f"📄 {title}", callback_data=cb_data))
         
         kb.add(types.InlineKeyboardButton("➕ Tambah", callback_data="note_add"))
@@ -895,22 +919,30 @@ async def state_note_content(message: types.Message, state: FSMContext):
         
     await state.finish()
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith('note_read:'), state="*")
+@dp.callback_query_handler(lambda c: c.data and (c.data.startswith('note_read:') or c.data.startswith('nr:')), state="*")
 async def cb_notes_read(call: types.CallbackQuery):
     try:
-        title = call.data.split(':', 1)[1]
+        if call.data.startswith('nr:'):
+            identifier = call.data.split(':', 1)[1]
+        else:
+            identifier = call.data.split(':', 1)[1]
     except IndexError:
         return await call.answer("Error data.")
 
-    content = await db.db_get_note_content(call.from_user.id, title)
+    data = await db.db_get_note_content(call.from_user.id, identifier)
     
     kb = types.InlineKeyboardMarkup(row_width=2)
+    # Use 'nd_ask:{id}' for delete ask
+    del_data = f"nd_ask:{identifier}"
+    
     kb.add(
-        types.InlineKeyboardButton("🗑 Hapus", callback_data=f"note_del_ask:{title}"),
+        types.InlineKeyboardButton("🗑 Hapus", callback_data=del_data),
         types.InlineKeyboardButton("🔙 Kembali", callback_data="note_list")
     )
     
-    if content:
+    if data:
+        title = data['title']
+        content = data['content']
         text = (
             f"<b>📝 {title}</b>\n"
             f"━━━━━━━━━━━━━━━━━━\n"
@@ -928,27 +960,27 @@ async def cb_notes_read(call: types.CallbackQuery):
     )
     await call.answer()
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith('note_del_ask:'), state="*")
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('nd_ask:'), state="*")
 async def cb_notes_del_ask(call: types.CallbackQuery):
-    title = call.data.split(':', 1)[1]
+    identifier = call.data.split(':', 1)[1]
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
-        types.InlineKeyboardButton("✅ Ya, Hapus", callback_data=f"note_del:{title}"),
-        types.InlineKeyboardButton("❌ Batal", callback_data=f"note_read:{title}")
+        types.InlineKeyboardButton("✅ Ya, Hapus", callback_data=f"nd:{identifier}"),
+        types.InlineKeyboardButton("❌ Batal", callback_data=f"nr:{identifier}")
     )
     
     await bot.edit_message_text(
-        f"❓ Apakah Anda yakin ingin menghapus catatan <b>{title}</b>?",
+        f"❓ Apakah Anda yakin ingin menghapus catatan ini?",
         call.message.chat.id,
         call.message.message_id,
         reply_markup=kb
     )
     await call.answer()
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith('note_del:'), state="*")
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('nd:'), state="*")
 async def cb_notes_del(call: types.CallbackQuery):
-    title = call.data.split(':', 1)[1]
-    if await db.db_delete_note(call.from_user.id, title):
+    identifier = call.data.split(':', 1)[1]
+    if await db.db_delete_note(call.from_user.id, identifier):
         await call.answer("Catatan dihapus!")
         await cb_notes_list(call)
     else:
@@ -1022,13 +1054,13 @@ async def cmd_notes(message: types.Message):
         # Ambil SELURUH sisa teks sebagai judul (Support Multi-word)
         title = args[2].strip()
         
-        content = await db.db_get_note_content(user_id, title)
+        data = await db.db_get_note_content(user_id, title)
         
-        if content:
+        if data:
             await message.reply(
-                f"<b>📝 CATATAN: {title}</b>\n"
+                f"<b>📝 CATATAN: {data['title']}</b>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
-                f"<code>{content}</code>\n"
+                f"<code>{data['content']}</code>\n"
                 f"━━━━━━━━━━━━━━━━━━\n"
                 f"<i>🔓 Terdekripsi otomatis.</i>"
             )
@@ -3077,10 +3109,11 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     saved = SAVED_MAILS.get(user_id, [])
     
     # AUTO-RESTORE LOGIC: Restore active session from DB if RAM is empty
+    # This ensures at least the currently active mail is visible
     if not saved:
         db_sess = await db.db_get_mail_session(user_id)
         if db_sess:
-             # Reconstruct session object matching SAVED_MAILS format
+             # Reconstruct session object
              restored = {
                  "email": db_sess['email'],
                  "password": db_sess['password'],
@@ -3091,8 +3124,11 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
 
     if not saved:
         return await callback_query.message.edit_text(
-            "⚠️ <b>Belum ada riwayat email.</b>\nBuat dulu dengan opsi di menu Temp Mail.",
-            reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("🔙 Menu Temp Mail", callback_data="m_mail"))
+            "⚠️ <b>Riwayat akun kosong.</b>\nRiwayat hilang saat bot restart. Silakan Login ulang atau Buat Baru.",
+            reply_markup=types.InlineKeyboardMarkup().add(
+                types.InlineKeyboardButton("🔑 Login Akun Lama", callback_data="m_mail_login"),
+                types.InlineKeyboardButton("🔙 Menu Temp Mail", callback_data="m_mail")
+            )
         )
 
     # Pagination Logic
@@ -3120,11 +3156,9 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
         is_active = "✅ " if email == current_email else ""
         
         if mode == "del":
-            # Delete Mode: Button deletes the email
             btn_text = f"🗑 Hapus: {email}"
             cb_data = f"dm_mail_{actual_idx}_{page}"
         else:
-            # View Mode: Button switches account
             btn_text = f"{is_active}{email}"
             cb_data = f"sw_mail_{actual_idx}_{page}"
             
@@ -3152,15 +3186,14 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
         )
 
     title_mode = "MENGHAPUS AKUN" if mode == "del" else "Saved Emails"
-    instr = "Klik akun untuk <b>MENGHAPUS</b> permanen." if mode == "del" else "Klik akun di bawah untuk ganti sesi (Switch)."
+    instr = "Klik akun untuk <b>MENGHAPUS</b> permanen." if mode == "del" else "Klik akun untuk <b>MENGAKTIFKAN</b>."
     
     text = f"<b>📧 {title_mode} ({total_items})</b>\n{instr}"
     
-    # Edit message text if it's a callback update
     try:
         await callback_query.message.edit_text(text, reply_markup=kb)
     except Exception:
-        pass # Content same
+        pass 
     await callback_query.answer()
 
 @dp.callback_query_handler(lambda c: c.data.startswith('dm_mail_'))
@@ -3276,20 +3309,19 @@ async def switch_mail_callback(callback_query: types.CallbackQuery):
     saved = SAVED_MAILS.get(user_id, [])
     
     if idx < 0 or idx >= len(saved):
-        return await bot.answer_callback_query(callback_query.id, "⚠️ Data tidak ditemukan.", show_alert=True)
+        return await bot.answer_callback_query(callback_query.id, "⚠️ Data tidak ditemukan/kadaluarsa.", show_alert=True)
         
     selected_account = saved[idx]
     
-    # Set as Active
+    # Set as Active in DB
     await db.db_save_mail_session(user_id, selected_account['email'], selected_account['password'], selected_account['token'])
     
     email = selected_account['email']
     
-    await bot.answer_callback_query(callback_query.id, f"✅ Switched to: {email}")
+    await bot.answer_callback_query(callback_query.id, f"✅ Akun aktif: {email}")
     
-    # Refresh List UI to show checkmark (Reuse logic by redirecting to m_mail_list:page)
-    # We can manually trigger the UI update by modifying the callback data and calling the list handler
-    callback_query.data = f"m_mail_list:{page}"
+    # Force Refresh List UI
+    callback_query.data = f"m_mail_list:{page}:view"
     await list_emails_callback(callback_query)
 
 
