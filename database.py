@@ -491,7 +491,7 @@ async def db_save_mail_session(user_id, email, password, token): return await ad
 async def db_get_mail_session(user_id): return await adapter.get_mail_session(user_id)
 async def db_delete_mail_session(user_id, mail_id=None): return await adapter.delete_mail_session(user_id, mail_id)
 async def db_touch_mail_session(user_id, mail_id): return await adapter.touch_mail_session(user_id, mail_id)
-async def db_get_mail_sessions_list(user_id, limit=10): return await adapter.get_mail_sessions_list(user_id, limit)
+async def db_get_mail_sessions_list(user_id, limit=20): return await adapter.get_mail_sessions_list(user_id, limit)
 async def db_get_pending_mail_sessions(limit=50): return await adapter.get_pending_mail_sessions(limit)
 async def db_update_mail_check_time(user_id, next_ts, last_msg_id=None): return await adapter.update_mail_check_time(user_id, next_ts, last_msg_id)
 async def db_update_mail_last_id(user_id, msg_id): return await adapter.update_mail_last_id(user_id, msg_id)
