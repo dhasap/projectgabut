@@ -357,10 +357,11 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
         return True
 
     async def get_notes_list(self, user_id):
-        return await self._exec("SELECT id, title, updated_at FROM notes WHERE user_id = %s", (user_id,), fetch=True, dict_cursor=True) or []
+        # Return ID and Title for efficient callbacks
+        return await self._exec("SELECT id, title FROM notes WHERE user_id = %s ORDER BY id DESC", (user_id,), fetch=True, dict_cursor=True) or []
 
     async def get_note_content(self, user_id, identifier):
-        # Identifier can be ID (int/digit str) or Title (str)
+        # Identifier can be ID (integer) or Title (string)
         if str(identifier).isdigit():
             row = await self._exec("SELECT content, title FROM notes WHERE user_id = %s AND id = %s", (user_id, identifier), fetch_one=True, dict_cursor=True)
         else:

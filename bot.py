@@ -509,6 +509,16 @@ async def cancel_handler(message: types.Message, state: FSMContext):
     
     await state.finish()
     await message.reply("✅ Operasi dibatalkan. Kembali ke mode normal.", reply_markup=menu_keyboard())
+@dp.message_handler(commands=['cancel', 'batal'], state="*")
+async def cancel_handler(message: types.Message, state: FSMContext):
+    """Global Cancel Handler."""
+    current_state = await state.get_state()
+    if current_state is None:
+        return await message.reply("Tidak ada operasi yang sedang berjalan.")
+    
+    await state.finish()
+    await message.reply("✅ Operasi dibatalkan. Kembali ke menu utama.", reply_markup=get_reply_keyboard(await is_owner(message.from_user.id)))
+
 @dp.callback_query_handler(lambda c: c.data in ['m_bin', 'm_chk', 'm_info', 'm_main', 'm_gen', 'm_mail', 'm_fake', 'm_rnd', 'm_iban'], state="*")
 async def process_callback_button(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish()
@@ -616,48 +626,30 @@ Contoh:
 
     elif code == 'm_info':
         is_owner_val = await is_owner(user.id)
+        # Fix: Show DB stats
+        db_user = await db.db_get_user_info(user.id)
+        joined = db_user.get('last_seen', 'Unknown') if db_user else 'Unknown'
+        
         await bot.send_message(
             user.id,
             f'''
-<b>ℹ️ Info</b>
+<b>ℹ️ Info Akun</b>
 ═════════╕
-<b>USER INFO</b>
-<b>USER ID:</b> <code>{user.id}</code>
-<b>USERNAME:</b> @{user.username}
-<b>FIRSTNAME:</b> {user.first_name}
-<b>BOT:</b> {user.is_bot}
-<b>BOT-OWNER:</b> {is_owner_val}
+<b>ID:</b> <code>{user.id}</code>
+<b>Username:</b> @{user.username}
+<b>Status:</b> {'👑 Owner' if is_owner_val else '👤 User'}
+<b>Terakhir Aktif:</b> {joined}
 ╘═════════'''
         )
     elif code == 'm_main':
-        # keyboard_markup = start_keyboard() # Start keyboard is Inline, we want to keep it in message but ensure user has Reply Keyboard too? 
-        # Actually start_keyboard is the Inline one inside the message. get_reply_keyboard is the bottom one.
-        # We can re-send the welcome message with the inline keyboard.
+        # Fix: Reply Keyboard must be sent via send_message, not edit_message
+        # We edit the inline message to say "Menu Utama" and then send the keyboard
+        try:
+            await bot.edit_message_text("👇 <b>Menu Utama</b> telah dibuka di bawah.", chat_id=user.id, message_id=callback_query.message.message_id, parse_mode=types.ParseMode.HTML)
+        except: pass
         
-        keyboard_markup = start_keyboard()
-        first_name = user.first_name or "Teman"
-        MSG = f'''
-<b>Halo {first_name}!</b> 👋
-Selamat datang di <b>{BOT_NAME}</b> — asistennya cek kartu & BIN yang cepat dan tertata.
-
-<b>Mulai cepat</b>
-• <code>{PREFIX}chk 0000|00|00|000</code> untuk cek kartu
-• <code>{PREFIX}gen 415464</code> untuk generator vcc
-• <code>{PREFIX}fake us</code> untuk identitas palsu
-• <code>{PREFIX}mail</code> untuk temp mail
-• <code>{PREFIX}bin 000000</code> untuk info BIN
-
-<b>Output ringkas</b>
-<code>✅CC ➟ 0000|00|00|000</code>
-<code>STATUS ➟ #CCN / #CHARGED / #Declined</code>
-
-<i>Butuh panduan lebih? Tekan Help atau Support di bawah.</i>
-'''
-        # We can't update Reply Keyboard via edit_message_reply_markup (only Inline).
-        # To show Reply Keyboard, we must send a new message.
-        # Since this is a callback (edit), we just edit the message content. 
-        # User usually already has the Reply Keyboard from /start.
-        await bot.edit_message_text(MSG, chat_id=user.id, message_id=callback_query.message.message_id, reply_markup=keyboard_markup, parse_mode=types.ParseMode.HTML, disable_web_page_preview=True)
+        is_adm = await is_owner(user.id)
+        await bot.send_message(user.id, "Silakan pilih menu:", reply_markup=get_reply_keyboard(is_adm))
         
         # FIX: Send Reply Keyboard separately to ensure it appears
         is_adm = await is_owner(user.id)
