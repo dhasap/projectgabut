@@ -147,14 +147,18 @@ BAN_DURATION = 600   # 10 Menit
 LOCAL_BANNED_CACHE = set()
 LOCAL_ADMINS_CACHE = {OWNER}
 
+# Load initial state - Moved to on_startup
+
+# ...
+
 async def refresh_security_cache():
     """Background task to refresh security cache without blocking main loop."""
     global LOCAL_BANNED_CACHE, LOCAL_ADMINS_CACHE
     while True:
         try:
-            # Run blocking DB calls in executor
-            banned = await loop.run_in_executor(None, db.db_get_banned)
-            admins = await loop.run_in_executor(None, lambda: db.db_get_admins(OWNER))
+            # Run async DB calls
+            banned = await db.db_get_banned()
+            admins = await db.db_get_admins(OWNER)
             
             if banned is not None: LOCAL_BANNED_CACHE = banned
             if admins is not None: LOCAL_ADMINS_CACHE = admins
@@ -244,29 +248,29 @@ import database as db
 # DATABASE INTEGRATION (SUPABASE/TiDB - ASYNC WRAPPERS)
 async def save_user(user: types.User):
     """Simpan user_id dan username ke database secara Async."""
-    await asyncio.to_thread(db.db_save_user, user.id, user.username, user.first_name)
+    await db.db_save_user(user.id, user.username, user.first_name)
 
 async def get_users_count():
-    return await asyncio.to_thread(db.db_get_users_count)
+    return await db.db_get_users_count()
 
-async def get_all_users():
-    return await asyncio.to_thread(db.db_get_all_users)
+async def get_users_batch(last_id=0, limit=100):
+    return await db.db_get_users_batch(last_id, limit)
 
 # ADMIN MANAGEMENT
 async def get_admins():
     """Mengambil set ID admin (Owner + Supabase Admins)."""
-    return await asyncio.to_thread(db.db_get_admins, OWNER)
+    return await db.db_get_admins(OWNER)
 
 async def add_new_admin(user_id, username=None):
     """Menambah admin baru ke database."""
     current = await get_admins()
     if user_id in current: return False
-    return await asyncio.to_thread(db.db_add_admin, user_id, username)
+    return await db.db_add_admin(user_id, username)
 
 async def remove_admin(user_id):
     """Menghapus admin dari database."""
     if user_id == OWNER: return False
-    return await asyncio.to_thread(db.db_remove_admin, user_id)
+    return await db.db_remove_admin(user_id)
 
 # GLOBAL STATE & SECURITY
 # In-Memory State
@@ -279,31 +283,28 @@ BOT_STATE = {
 SPY_MODE = False
 SPY_ADMIN = None
 
-def load_bot_state():
-    """Load state dari Database (Synchronous at Startup is OK)."""
+async def load_bot_state():
+    """Load state dari Database (Async)."""
     global BOT_STATE
-    saved = db.db_load_state()
+    saved = await db.db_load_state()
     if saved:
         BOT_STATE.update(saved)
 
 async def save_bot_state():
     """Save state ke Database Async."""
-    await asyncio.to_thread(db.db_save_state, BOT_STATE)
-
-# Load initial state
-load_bot_state()
+    await db.db_save_state(BOT_STATE)
 
 async def get_banned_users():
     """Get set of banned user IDs."""
-    return await asyncio.to_thread(db.db_get_banned)
+    return await db.db_get_banned()
 
 async def ban_user(user_id):
     current = await get_banned_users()
     if str(user_id) in current: return False
-    return await asyncio.to_thread(db.db_ban_user, user_id)
+    return await db.db_ban_user(user_id)
 
 async def unban_user(user_id):
-    return await asyncio.to_thread(db.db_unban_user, user_id)
+    return await db.db_unban_user(user_id)
 
 
 # TEMP MAIL STORAGE
@@ -326,7 +327,7 @@ async def save_email_session(user_id, email, password, token):
     if len(SAVED_MAILS[user_id]) > 10:
         SAVED_MAILS[user_id].pop()
         
-    await asyncio.to_thread(db.db_save_mail_session, user_id, email, password, token) 
+    await db.db_save_mail_session(user_id, email, password, token) 
 
 # BOT INFO
 loop = asyncio.get_event_loop()
@@ -435,7 +436,7 @@ def get_admin_keyboard():
 async def log_admin_action(user, action, details):
     """Helper untuk mencatat log secara Async."""
     try:
-        await asyncio.to_thread(db.db_log_activity, user.id, user.username, action, details)
+        await db.db_log_activity(user.id, user.username, action, details)
     except: pass
 
 
@@ -453,8 +454,9 @@ async def run_command_from_start(message: types.Message, command_text: str, hand
         message.text = original_text
 
 
-@dp.callback_query_handler(lambda c: c.data and c.data.startswith('gen_'))
-async def process_gen_callback(callback_query: types.CallbackQuery):
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('gen_'), state="*")
+async def process_gen_callback(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.finish()
     await bot.answer_callback_query(callback_query.id)
     bin_to_gen = callback_query.data.split('_')[1]
     
@@ -499,8 +501,9 @@ async def check_sub_callback(callback_query: types.CallbackQuery):
         except: pass
 
 
-@dp.callback_query_handler(lambda c: c.data in ['m_bin', 'm_chk', 'm_info', 'm_main', 'm_gen', 'm_mail', 'm_fake', 'm_rnd', 'm_iban'])
-async def process_callback_button(callback_query: types.CallbackQuery):
+@dp.callback_query_handler(lambda c: c.data in ['m_bin', 'm_chk', 'm_info', 'm_main', 'm_gen', 'm_mail', 'm_fake', 'm_rnd', 'm_iban'], state="*")
+async def process_callback_button(callback_query: types.CallbackQuery, state: FSMContext):
+    await state.finish()
     code = callback_query.data
     user = callback_query.from_user
     await bot.answer_callback_query(callback_query.id)
@@ -649,8 +652,9 @@ Selamat datang di <b>{BOT_NAME}</b> — asistennya cek kartu & BIN yang cepat da
         await bot.edit_message_text(MSG, chat_id=user.id, message_id=callback_query.message.message_id, reply_markup=keyboard_markup, parse_mode=types.ParseMode.HTML, disable_web_page_preview=True)
 
 
-@dp.message_handler(commands=['start', 'help'], commands_prefix=PREFIX)
-async def helpstr(message: types.Message):
+@dp.message_handler(commands=['start', 'help'], commands_prefix=PREFIX, state="*")
+async def helpstr(message: types.Message, state: FSMContext):
+    await state.finish()
     # Log user Async (Background)
     asyncio.create_task(save_user(message.from_user))
     
@@ -803,7 +807,7 @@ async def cb_notes_main(call: types.CallbackQuery, state: FSMContext):
 @dp.callback_query_handler(text="note_list", state="*")
 async def cb_notes_list(call: types.CallbackQuery):
     user_id = call.from_user.id
-    notes = await asyncio.to_thread(db.db_get_notes_list, user_id)
+    notes = await db.db_get_notes_list(user_id)
     
     kb = types.InlineKeyboardMarkup(row_width=1)
     text = ""
@@ -853,7 +857,7 @@ async def state_note_title(message: types.Message, state: FSMContext):
         return await message.reply("⚠️ <b>Judul terlalu panjang!</b>\nMaksimal 30 karakter. Silakan kirim ulang.")
     
     # Check if title exists
-    if await asyncio.to_thread(db.db_get_note_content, message.from_user.id, title):
+    if await db.db_get_note_content(message.from_user.id, title):
          return await message.reply("⚠️ <b>Judul sudah ada!</b>\nSilakan gunakan judul lain.")
 
     await state.update_data(title=title)
@@ -871,7 +875,7 @@ async def state_note_content(message: types.Message, state: FSMContext):
         return await message.reply("⚠️ <b>Catatan Terlalu Panjang!</b>\nMaksimal 2000 karakter.")
     
     # SECURITY: Quota Limit
-    existing = await asyncio.to_thread(db.db_get_notes_list, message.from_user.id)
+    existing = await db.db_get_notes_list(message.from_user.id)
     if len(existing) >= 50:
         await state.finish()
         return await message.reply("⚠️ <b>Kuota Penuh!</b>\nMaksimal 50 catatan per user. Silakan hapus catatan lama.")
@@ -879,7 +883,7 @@ async def state_note_content(message: types.Message, state: FSMContext):
     data = await state.get_data()
     title = data['title']
     
-    if await asyncio.to_thread(db.db_save_note, message.from_user.id, title, content):
+    if await db.db_save_note(message.from_user.id, title, content):
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("📂 Lihat Daftar", callback_data="note_list"))
         await message.reply(
@@ -898,7 +902,7 @@ async def cb_notes_read(call: types.CallbackQuery):
     except IndexError:
         return await call.answer("Error data.")
 
-    content = await asyncio.to_thread(db.db_get_note_content, call.from_user.id, title)
+    content = await db.db_get_note_content(call.from_user.id, title)
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -944,7 +948,7 @@ async def cb_notes_del_ask(call: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('note_del:'), state="*")
 async def cb_notes_del(call: types.CallbackQuery):
     title = call.data.split(':', 1)[1]
-    if await asyncio.to_thread(db.db_delete_note, call.from_user.id, title):
+    if await db.db_delete_note(call.from_user.id, title):
         await call.answer("Catatan dihapus!")
         await cb_notes_list(call)
     else:
@@ -987,7 +991,7 @@ async def cmd_notes(message: types.Message):
         if not content:
              return await message.reply("⚠️ <b>Konten Kosong!</b>\nMasukkan isi catatan yang ingin disimpan.")
              
-        if await asyncio.to_thread(db.db_save_note, user_id, title, content):
+        if await db.db_save_note(user_id, title, content):
             await message.reply(f"✅ Catatan <b>{title}</b> berhasil disimpan secara aman.")
         else:
             await message.reply("⚠️ <b>Gagal Menyimpan.</b>\nTerjadi kesalahan database atau judul sudah ada.")
@@ -995,7 +999,7 @@ async def cmd_notes(message: types.Message):
     # --- LIST NOTES ---
     elif action == "list":
         await message.answer_chat_action('typing')
-        notes = await asyncio.to_thread(db.db_get_notes_list, user_id)
+        notes = await db.db_get_notes_list(user_id)
         if not notes:
             return await message.reply("📭 <b>Belum ada catatan.</b>\nBuat baru dengan <code>/note add</code>")
             
@@ -1018,7 +1022,7 @@ async def cmd_notes(message: types.Message):
         # Ambil SELURUH sisa teks sebagai judul (Support Multi-word)
         title = args[2].strip()
         
-        content = await asyncio.to_thread(db.db_get_note_content, user_id, title)
+        content = await db.db_get_note_content(user_id, title)
         
         if content:
             await message.reply(
@@ -1040,7 +1044,7 @@ async def cmd_notes(message: types.Message):
         # Ambil SELURUH sisa teks sebagai judul
         title = args[2].strip()
         
-        if await asyncio.to_thread(db.db_delete_note, user_id, title):
+        if await db.db_delete_note(user_id, title):
             await message.reply(f"🗑️ Catatan <b>{title}</b> berhasil dihapus.")
         else:
             await message.reply(f"⚠️ Gagal menghapus. Pastikan judul benar.")
@@ -1209,29 +1213,18 @@ async def cmd_spy(message: types.Message):
 async def broadcast_msg(message: types.Message):
     if message.from_user.id not in await get_admins(): return
     
-    users = await get_all_users()
-    count = 0
-    
     # Mode 1: Reply Broadcast (Forward/Copy)
+    mode = "text"
+    src = None
+    kb = None
+    msg_text = ""
+    
     if message.reply_to_message:
+        mode = "reply"
         src = message.reply_to_message
-        await message.reply(f"🚀 Memulai forward broadcast ke {len(users)} pengguna...")
+        await message.reply(f"🚀 Memulai forward broadcast...")
+        await log_admin_action(message.from_user, "BROADCAST_FWD", f"To ALL users")
         
-        await log_admin_action(message.from_user, "BROADCAST_FWD", f"To {len(users)} users")
-        
-        for i, uid in enumerate(users):
-            try:
-                # Use forward_message as it is safest in 2.x
-                await src.forward(uid)
-                count += 1
-                
-                # Smart Delay (Anti-Flood)
-                if i % 20 == 0:
-                    await asyncio.sleep(1.5) # Istirahat tiap 20 pesan
-                else:
-                    await asyncio.sleep(0.05) 
-            except: pass
-            
     # Mode 2: Text Broadcast (With Buttons Support)
     else:
         raw_text = message.text.split(maxsplit=1)
@@ -1249,7 +1242,6 @@ async def broadcast_msg(message: types.Message):
         parts = full_args.split('~')
         msg_text = parts[0].strip()
         
-        kb = None
         if len(parts) > 1:
             kb = types.InlineKeyboardMarkup(row_width=1)
             for btn_str in parts[1:]:
@@ -1257,31 +1249,61 @@ async def broadcast_msg(message: types.Message):
                     label, url = btn_str.split(':', 1)
                     kb.add(types.InlineKeyboardButton(label.strip(), url=url.strip()))
         
-        await message.reply(f"🚀 Memulai text broadcast ke {len(users)} pengguna...")
+        await message.reply(f"🚀 Memulai text broadcast...")
         await log_admin_action(message.from_user, "BROADCAST_TXT", f"Msg: {msg_text[:20]}...")
+
+    # PAGINATED BROADCAST LOOP
+    count = 0
+    last_id = 0
+    BATCH_SIZE = 500
+    
+    while True:
+        # Fetch Batch
+        users = await get_users_batch(last_id=last_id, limit=BATCH_SIZE)
+        if not users: break
+        
+        last_id = users[-1] # Update cursor for next batch
         
         for i, uid in enumerate(users):
             try:
-                await bot.send_message(uid, f"<b>📢 PENGUMUMAN</b>\n\n{msg_text}", reply_markup=kb)
+                if mode == "reply":
+                    await src.forward(uid)
+                else:
+                    await bot.send_message(uid, f"<b>📢 PENGUMUMAN</b>\n\n{msg_text}", reply_markup=kb)
+                
                 count += 1
                 
-                # Smart Delay
+                # Smart Delay (Anti-Flood)
                 if i % 20 == 0:
                     await asyncio.sleep(1.5)
                 else:
-                    await asyncio.sleep(0.05)
-            except: pass
+                    await asyncio.sleep(0.04)
+            except Exception as e:
+                # Optional: Handle Blocked User / Deactivated
+                pass
+                
+        await asyncio.sleep(2) # Rest between batches
             
     await message.reply(f"✅ Broadcast selesai. Terkirim ke {count} pengguna.")
 
 async def background_broadcast(text):
-    """Kirim pesan ke semua user secara background."""
-    users = get_all_users()
-    for uid in users:
-        try:
-            await bot.send_message(uid, text)
-            await asyncio.sleep(0.05) # Rate limit safe
-        except: pass
+    """Kirim pesan ke semua user secara background dengan pagination."""
+    last_id = 0
+    BATCH_SIZE = 500
+    
+    while True:
+        users = await get_users_batch(last_id=last_id, limit=BATCH_SIZE)
+        if not users: break
+        
+        last_id = users[-1]
+        
+        for uid in users:
+            try:
+                await bot.send_message(uid, text)
+                await asyncio.sleep(0.05) # Rate limit safe
+            except: pass
+            
+        await asyncio.sleep(2)
 
 @dp.callback_query_handler(lambda c: c.data in ['maint_on', 'maint_off'])
 async def process_maint_callback(callback_query: types.CallbackQuery):
@@ -1340,7 +1362,7 @@ async def cmd_set_start(message: types.Message):
     if len(text) < 2: return await message.reply(f"⚠️ Gunakan: <code>{PREFIX}setstart [pesan baru]</code>")
     
     content = text[1]
-    db.db_set_config("start_text", content)
+    await db.db_set_config("start_text", content)
     await log_admin_action(message.from_user, "SET_START", "Updated start message")
     await message.reply("✅ Pesan Start berhasil diubah!")
 
@@ -1351,7 +1373,7 @@ async def cmd_set_help(message: types.Message):
     if len(text) < 2: return await message.reply(f"⚠️ Gunakan: <code>{PREFIX}sethelp [pesan baru]</code>")
     
     content = text[1]
-    db.db_set_config("help_text", content)
+    await db.db_set_config("help_text", content)
     await log_admin_action(message.from_user, "SET_HELP", "Updated help message")
     await message.reply("✅ Pesan Help berhasil diubah!")
 
@@ -1472,12 +1494,22 @@ async def process_admin_keyboard(message: types.Message):
             status_chkr = "🟢 LOCAL (Internal)"
         except: status_chkr = "🔴 ERROR"
         
+        # DB Metrics
+        m = await db.db_get_metrics()
+        q_count = m.get('count', 0)
+        q_err = m.get('errors', 0)
+        avg_lat = (m.get('latency_sum', 0) / q_count * 1000) if q_count else 0
+        
         msg = (
             "<b>🏥 SYSTEM HEALTH CHECK</b>\n"
             "━━━━━━━━━━━━━━━━━━\n"
             f"💳 <b>Binlist API:</b> {status_binlist}\n"
             f"📧 <b>Mail.tm API:</b> {status_mailtm}\n"
-            f"✅ <b>Checker API:</b> {status_chkr}"
+            f"✅ <b>Checker API:</b> {status_chkr}\n\n"
+            "<b>🗄️ Database (TiDB Async)</b>\n"
+            f"• Queries: {q_count}\n"
+            f"• Errors: {q_err}\n"
+            f"• Avg Latency: {avg_lat:.2f} ms"
         )
         await message.reply(msg)
 
@@ -1544,7 +1576,7 @@ async def process_admin_keyboard(message: types.Message):
         await message.reply(guide_msg, reply_markup=kb)
 
     elif text == "📜 Admin Logs":
-        logs = await asyncio.to_thread(db.db_get_activity_logs, limit=15)
+        logs = await db.db_get_activity_logs(limit=15)
         if not logs:
             return await message.reply("📭 <b>Log Kosong</b>\nBelum ada aktivitas admin tercatat.")
             
@@ -1892,8 +1924,9 @@ async def show_linked_message(call: types.CallbackQuery):
     await call.answer()
 
 
-@dp.message_handler(lambda message: menu_manager.get_action_by_label(message.text) is not None)
-async def process_dynamic_reply_button(message: types.Message):
+@dp.message_handler(lambda message: menu_manager.get_action_by_label(message.text) is not None, state="*")
+async def process_dynamic_reply_button(message: types.Message, state: FSMContext):
+    await state.finish()
     """Handler dinamis untuk tombol Reply Keyboard."""
     text = message.text
     btn_data = menu_manager.get_action_by_label(text)
@@ -2059,17 +2092,17 @@ async def info(message: types.Message):
     fullname = target.full_name
     
     # Get DB Info
-    db_data = db.db_get_user_info(user_id)
+    db_data = await db.db_get_user_info(user_id)
     joined_date = "Unknown"
     if db_data and 'joined_at' in db_data:
         # Format ISO timestamp to readable
         try:
-            ts = db_data['joined_at'][:10] # YYYY-MM-DD
+            ts = str(db_data['joined_at'])[:10] # YYYY-MM-DD
             joined_date = ts
         except: pass
         
     # Check Role
-    is_adm = user_id in get_admins()
+    is_adm = user_id in await get_admins()
     is_own = user_id == OWNER
     
     role = "👤 User Biasa"
@@ -2079,7 +2112,7 @@ async def info(message: types.Message):
     # Check Temp Mail Session
     mail_sess = "Tidak ada"
     # Check DB
-    db_sess = db.db_get_mail_session(user_id)
+    db_sess = await db.db_get_mail_session(user_id)
     if db_sess:
         mail_sess = f"<code>{db_sess['email']}</code>"
 
@@ -3045,7 +3078,7 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     
     # AUTO-RESTORE LOGIC: Restore active session from DB if RAM is empty
     if not saved:
-        db_sess = await asyncio.to_thread(db.db_get_mail_session, user_id)
+        db_sess = await db.db_get_mail_session(user_id)
         if db_sess:
              # Reconstruct session object matching SAVED_MAILS format
              restored = {
@@ -3075,7 +3108,7 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     current_page_items = saved[start_idx:end_idx]
     
     # Get Active Session from DB
-    sess = await asyncio.to_thread(db.db_get_mail_session, user_id)
+    sess = await db.db_get_mail_session(user_id)
     current_email = sess['email'] if sess else ''
     
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -3180,7 +3213,7 @@ async def list_emails(message: types.Message):
     
     # AUTO-RESTORE LOGIC
     if not saved:
-        db_sess = await asyncio.to_thread(db.db_get_mail_session, user_id)
+        db_sess = await db.db_get_mail_session(user_id)
         if db_sess:
              # Reconstruct session object matching SAVED_MAILS format
              restored = {
@@ -3206,7 +3239,7 @@ async def list_emails(message: types.Message):
     
     current_page_items = saved[0:MAX_PER_PAGE]
     
-    sess = await asyncio.to_thread(db.db_get_mail_session, user_id)
+    sess = await db.db_get_mail_session(user_id)
     current_email = sess['email'] if sess else ''
     
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -3248,7 +3281,7 @@ async def switch_mail_callback(callback_query: types.CallbackQuery):
     selected_account = saved[idx]
     
     # Set as Active
-    await asyncio.to_thread(db.db_save_mail_session, user_id, selected_account['email'], selected_account['password'], selected_account['token'])
+    await db.db_save_mail_session(user_id, selected_account['email'], selected_account['password'], selected_account['token'])
     
     email = selected_account['email']
     
@@ -3442,13 +3475,13 @@ async def save_fake_id_callback(callback_query: types.CallbackQuery):
     )
     
     # Save to DB
-    if await asyncio.to_thread(db.db_save_note, user_id, title, content):
+    if await db.db_save_note(user_id, title, content):
         await callback_query.answer("✅ Identitas berhasil disimpan ke Catatan!", show_alert=True)
     else:
         # If duplicate title or other error
         # Try appending random digit if duplicate
         title_alt = f"{title} ({random.randint(1,99)})"
-        if await asyncio.to_thread(db.db_save_note, user_id, title_alt, content):
+        if await db.db_save_note(user_id, title_alt, content):
              await callback_query.answer("✅ Tersimpan! (Judul disesuaikan)", show_alert=True)
         else:
              await callback_query.answer("⚠️ Gagal menyimpan. Cek kuota catatan Anda.", show_alert=True)
@@ -3544,50 +3577,78 @@ async def set_default_commands(dp):
 
 
 async def auto_check_mail():
-    """Background task to check for new emails for all active users."""
+    """Adaptive Polling for Temp Mail (Batch + Backoff)."""
     while True:
         try:
-            # Iterate active sessions from DB
-            sessions = db.db_get_all_mail_sessions()
-            for data in sessions:
-                user_id = data['user_id']
-                token = data.get('token')
-                last_id = data.get('last_msg_id')
+            # 1. Fetch sessions due for check (Batch of 50)
+            sessions = await db.db_get_pending_mail_sessions(limit=50)
+            if not sessions:
+                await asyncio.sleep(5) # No pending, sleep short
+                continue
                 
-                msgs = await get_mail_messages(token)
-                if msgs and len(msgs) > 0:
-                    newest_msg = msgs[0] # First item is newest
-                    newest_id = newest_msg.get('id')
-                    
-                    if newest_id != last_id:
-                        # New message found!
-                        # Update last_id immediately to avoid spam
-                        db.db_update_mail_last_id(user_id, newest_id)
-                        
-                        sender = newest_msg.get('from', {}).get('address', 'Unknown')
-                        subject = newest_msg.get('subject', 'No Subject')
-                        
-                        kb = types.InlineKeyboardMarkup()
-                        kb.add(types.InlineKeyboardButton("📖 Baca Pesan", callback_data=f"read_{newest_id}"))
-                        
-                        try:
-                            await bot.send_message(
-                                user_id,
-                                f"<b>🔔 EMAIL BARU MASUK!</b>\n"
-                                f"━━━━━━━━━━━━━━━━━━\n"
-                                f"<b>Dari:</b> {sender}\n"
-                                f"<b>Subjek:</b> {subject}",
-                                reply_markup=kb
-                            )
-                        except Exception as e:
-                            # User might have blocked bot
-                            if "bot was blocked" in str(e):
-                                db.db_delete_mail_session(user_id)
-                                
+            tasks = []
+            now = time.time()
+            
+            for data in sessions:
+                tasks.append(check_single_mail(data, now))
+                
+            # Run batch concurrently
+            await asyncio.gather(*tasks)
+            
+            # Avoid tight loop if processing is super fast
+            await asyncio.sleep(1)
+            
         except Exception as e:
             logging.error(f"Auto check mail error: {e}")
+            await asyncio.sleep(15)
+
+async def check_single_mail(data, now):
+    user_id = data['user_id']
+    token = data.get('token')
+    last_id = data.get('last_msg_id')
+    
+    try:
+        msgs = await asyncio.to_thread(get_mail_messages, token)
+        
+        # Scenario 1: New Message Found
+        if msgs and len(msgs) > 0:
+            newest_msg = msgs[0]
+            newest_id = newest_msg.get('id')
             
-        await asyncio.sleep(15) # Check every 15 seconds
+            if newest_id != last_id:
+                # Update DB: Last ID + Reset Timer (15s)
+                await db.db_update_mail_check_time(user_id, now + 15, newest_id)
+                
+                # Send Notification
+                sender = newest_msg.get('from', {}).get('address', 'Unknown')
+                subject = newest_msg.get('subject', 'No Subject')
+                kb = types.InlineKeyboardMarkup()
+                kb.add(types.InlineKeyboardButton("📖 Baca Pesan", callback_data=f"read_{newest_id}"))
+                
+                try:
+                    await bot.send_message(
+                        user_id,
+                        f"<b>🔔 EMAIL BARU MASUK!</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━\n"
+                        f"<b>Dari:</b> {sender}\n"
+                        f"<b>Subjek:</b> {subject}",
+                        reply_markup=kb
+                    )
+                except Exception as e:
+                    if "bot was blocked" in str(e):
+                        await db.db_delete_mail_session(user_id)
+                return
+
+        # Scenario 2: No New Message (Backoff)
+        # Increase check interval: 15s -> 30s -> 60s -> ... -> Max 300s
+        # Since we don't store current interval, we estimate based on probability or just random backoff
+        # Simpler: Just add 60s for now to save RU. Active users can refresh manually.
+        # Better: Add fixed 30s.
+        await db.db_update_mail_check_time(user_id, now + 30)
+        
+    except Exception:
+        # Error (Token invalid?): Push back 5 minutes
+        await db.db_update_mail_check_time(user_id, now + 300)
 
 async def on_startup(dp):
     # Try to set commands with retry logic

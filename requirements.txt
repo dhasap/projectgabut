@@ -6,4 +6,6 @@ Faker
 psutil
 supabase
 cryptography
-mysql-connector-python
+aiomysql
+redis
+async_timeout

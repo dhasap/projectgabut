@@ -2,355 +2,170 @@ import os
 import logging
 import json
 import time
+import asyncio
 from datetime import datetime
 import base64
 from cryptography.fernet import Fernet
 
-# --- CACHE STORAGE (SMART CACHING) ---
-# Menyimpan data di RAM untuk akses super cepat.
-# Cache akan otomatis dihapus (invalidated) jika ada perubahan data (add/delete).
-_CACHE_BANNED = {"data": set(), "expiry": 0}
-_CACHE_ADMINS = {"data": set(), "expiry": 0}
-CACHE_TTL = 300 # 5 Menit (Fallback jika tidak ada event update)
+# --- ASYNC REDIS CACHE ---
+try:
+    import redis.asyncio as redis
+    HAS_REDIS = True
+except ImportError:
+    HAS_REDIS = False
 
-def invalidate_cache(cache_type):
-    """Menghapus cache agar data diambil ulang dari DB."""
-    if cache_type == "banned":
-        _CACHE_BANNED["expiry"] = 0
-    elif cache_type == "admins":
-        _CACHE_ADMINS["expiry"] = 0
+class AsyncCacheManager:
+    def __init__(self):
+        self.redis = None
+        self.local_cache = {}
+        redis_url = os.getenv("REDIS_URL")
+        env_mode = os.getenv("ENV", "development").lower()
+        
+        if HAS_REDIS and redis_url:
+            try:
+                self.redis = redis.from_url(redis_url, decode_responses=True)
+                logging.info("✅ Cache: Menggunakan Redis (Async)")
+            except Exception as e:
+                logging.error(f"❌ Redis Init Failed: {e}")
+                if env_mode == "production":
+                    raise RuntimeError("Redis is MANDATORY in production!")
+        elif env_mode == "production":
+             raise RuntimeError("Redis URL not set in PRODUCTION mode!")
+
+    async def get(self, key):
+        # 1. Try Redis
+        if self.redis:
+            try:
+                val = await self.redis.get(key)
+                if val: return json.loads(val)
+            except Exception as e:
+                logging.error(f"Redis Get Error: {e}")
+
+        # 2. Fallback to Local RAM
+        entry = self.local_cache.get(key)
+        if entry and entry['expiry'] > time.time():
+            return entry['data']
+        return None
+
+    async def set(self, key, value, ttl=300):
+        # 1. Set Redis
+        if self.redis:
+            try:
+                # Convert sets to list for JSON serialization
+                if isinstance(value, set):
+                    val_serializable = list(value)
+                else:
+                    val_serializable = value
+                await self.redis.setex(key, ttl, json.dumps(val_serializable))
+            except Exception as e:
+                logging.error(f"Redis Set Error: {e}")
+
+        # 2. Set Local RAM
+        self.local_cache[key] = {"data": value, "expiry": time.time() + ttl}
+
+    async def delete(self, key):
+        if self.redis:
+            try: await self.redis.delete(key)
+            except: pass
+        if key in self.local_cache:
+            del self.local_cache[key]
+
+# Initialize Global Cache
+cache = AsyncCacheManager()
+CACHE_TTL = 300  # 5 Menit
 
 # --- DATABASE ADAPTER INTERFACE ---
-class DatabaseAdapter:
-    def save_user(self, user_id, username=None, first_name=None): pass
-    def get_all_users(self): return []
-    def get_users_count(self): return 0
-    def get_user_info(self, user_id): return None
-    def get_admins(self, owner_id): return {int(owner_id)}
-    def add_admin(self, user_id, username=None): return False
-    def remove_admin(self, user_id): return False
-    def get_banned(self): return set()
-    def ban_user(self, user_id, username=None, reason="Admin Ban"): return False
-    def unban_user(self, user_id): return False
-    def save_state(self, state_data): pass
-    def load_state(self): return {}
-    def log_activity(self, admin_id, username, action, details): pass
-    def get_activity_logs(self, limit=10): return []
-    def set_config(self, key, value): pass
-    def save_note(self, user_id, title, content): return False
-    def get_notes_list(self, user_id): return []
-    def get_note_content(self, user_id, title): return None
-    def delete_note(self, user_id, title): return False
-    def save_mail_session(self, user_id, email, password, token): pass
-    def get_mail_session(self, user_id): return None
-    def delete_mail_session(self, user_id): return False
-    def get_all_mail_sessions(self): return []
-    def update_mail_last_id(self, user_id, msg_id): pass
-    def initialize(self): pass
+class AsyncDatabaseAdapter:
+    async def initialize(self): pass
+    async def save_user(self, user_id, username=None, first_name=None): pass
+    async def get_users_batch(self, last_id=0, limit=100): return []
+    async def get_users_count(self): return 0
+    async def get_user_info(self, user_id): return None
+    async def get_admins(self, owner_id): return {int(owner_id)}
+    async def add_admin(self, user_id, username=None): return False
+    async def remove_admin(self, user_id): return False
+    async def get_banned(self): return set()
+    async def ban_user(self, user_id, username=None, reason="Admin Ban"): return False
+    async def unban_user(self, user_id): return False
+    async def save_state(self, state_data): pass
+    async def load_state(self): return {}
+    async def log_activity(self, admin_id, username, action, details): pass
+    async def get_activity_logs(self, limit=10): return []
+    async def set_config(self, key, value): pass
+    async def save_note(self, user_id, title, content): return False
+    async def get_notes_list(self, user_id): return []
+    async def get_note_content(self, user_id, title): return None
+    async def delete_note(self, user_id, title): return False
+    async def save_mail_session(self, user_id, email, password, token): pass
+    async def get_mail_session(self, user_id): return None
+    async def delete_mail_session(self, user_id): return False
+    async def get_pending_mail_sessions(self, limit=50): return []
+    async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None): pass
+    
+    # Metrics
+    metrics = {'count': 0, 'latency_sum': 0, 'errors': 0}
 
-# --- SUPABASE IMPLEMENTATION ---
-class SupabaseAdapter(DatabaseAdapter):
+# --- SUPABASE IMPLEMENTATION (ASYNC WRAPPER) ---
+class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
     def __init__(self, url, key):
         from supabase import create_client
         self.client = create_client(url, key)
-        logging.info("✅ Menggunakan Database: Supabase")
+        logging.info("✅ Menggunakan Database: Supabase (Wrapped Async)")
 
-    def save_user(self, user_id, username=None, first_name=None):
+    async def save_user(self, user_id, username=None, first_name=None):
+        await asyncio.to_thread(self._save_user_sync, user_id, username, first_name)
+    
+    def _save_user_sync(self, user_id, username, first_name):
         try:
-            data = {
-                "user_id": user_id, 
-                "username": username,
-                "first_name": first_name,
-                "last_seen": datetime.utcnow().isoformat()
-            }
+            data = {"user_id": user_id, "username": username, "first_name": first_name, "last_seen": datetime.utcnow().isoformat()}
             self.client.table("users").upsert(data, on_conflict="user_id").execute()
-        except Exception as e:
-            logging.error(f"Supabase Error save_user: {e}")
+        except: pass
 
-    def get_all_users(self):
-        try:
-            response = self.client.table("users").select("user_id").execute()
-            return [item['user_id'] for item in response.data]
-        except Exception as e:
-            logging.error(f"Supabase Error get_all_users: {e}")
-            return []
+    async def get_admins(self, owner_id):
+        return {int(owner_id)} 
 
-    def get_users_count(self):
-        try:
-            response = self.client.table("users").select("user_id", count="exact").execute()
-            return response.count
-        except Exception as e:
-            logging.error(f"Supabase Error get_users_count: {e}")
-            return 0
-
-    def get_user_info(self, user_id):
-        try:
-            response = self.client.table("users").select("*").eq("user_id", user_id).execute()
-            if response.data:
-                return response.data[0]
-        except Exception as e:
-            logging.error(f"Supabase Error get_info: {e}")
-        return None
-
-    def get_admins(self, owner_id):
-        # Caching Layer (Smart Cache)
-        if time.time() < _CACHE_ADMINS["expiry"]:
-            return _CACHE_ADMINS["data"]
-
-        admins = {int(owner_id)}
-        try:
-            response = self.client.table("admins").select("user_id").execute()
-            for item in response.data:
-                admins.add(int(item['user_id']))
-            
-            # Update Cache
-            _CACHE_ADMINS["data"] = admins
-            _CACHE_ADMINS["expiry"] = time.time() + CACHE_TTL
-        except Exception as e:
-            logging.error(f"Supabase Error get_admins: {e}")
-        return admins
-
-    def add_admin(self, user_id, username=None):
-        try:
-            data = {
-                "user_id": user_id, 
-                "username": username,
-                "promoted_at": datetime.utcnow().isoformat()
-            }
-            self.client.table("admins").insert(data).execute()
-            invalidate_cache("admins") # Reset Cache
-            return True
-        except Exception as e:
-            logging.error(f"Supabase Error add_admin: {e}")
-            return False
-
-    def remove_admin(self, user_id):
-        try:
-            self.client.table("admins").delete().eq("user_id", user_id).execute()
-            invalidate_cache("admins") # Reset Cache
-            return True
-        except Exception as e:
-            logging.error(f"Supabase Error remove_admin: {e}")
-            return False
-
-    def get_banned(self):
-        # Caching Layer (Smart Cache)
-        if time.time() < _CACHE_BANNED["expiry"]:
-            return _CACHE_BANNED["data"]
-            
-        banned = set()
-        try:
-            response = self.client.table("banned").select("user_id").execute()
-            for item in response.data:
-                banned.add(str(item['user_id']))
-                
-            # Update Cache
-            _CACHE_BANNED["data"] = banned
-            _CACHE_BANNED["expiry"] = time.time() + CACHE_TTL
-        except Exception as e:
-            logging.error(f"Supabase Error get_banned: {e}")
-        return banned
-
-    def ban_user(self, user_id, username=None, reason="Admin Ban"):
-        try:
-            data = {
-                "user_id": user_id, 
-                "username": username,
-                "reason": reason, 
-                "banned_at": datetime.utcnow().isoformat()
-            }
-            self.client.table("banned").upsert(data).execute()
-            invalidate_cache("banned") # Reset Cache
-            return True
-        except Exception as e:
-            logging.error(f"Supabase Error ban_user: {e}")
-            return False
-
-    def unban_user(self, user_id):
-        try:
-            self.client.table("banned").delete().eq("user_id", user_id).execute()
-            invalidate_cache("banned") # Reset Cache
-            return True
-        except Exception as e:
-            logging.error(f"Supabase Error unban_user: {e}")
-            return False
-
-    def save_state(self, state_data):
-        try:
-            data = {"key": "bot_config", "value": state_data}
-            self.client.table("bot_state").upsert(data, on_conflict="key").execute()
-        except Exception as e:
-            logging.error(f"Supabase Error save_state: {e}")
-
-    def load_state(self):
-        try:
-            response = self.client.table("bot_state").select("value").eq("key", "bot_config").execute()
-            if response.data:
-                return response.data[0]['value']
-        except Exception as e:
-            logging.error(f"Supabase Error load_state: {e}")
-        return {}
-
-    def log_activity(self, admin_id, username, action, details):
-        try:
-            data = {
-                "admin_id": admin_id,
-                "username": username,
-                "action": action,
-                "details": details,
-                "created_at": datetime.utcnow().isoformat()
-            }
-            self.client.table("activity_logs").insert(data).execute()
-        except Exception as e:
-            logging.error(f"Supabase Error log_activity: {e}")
-
-    def get_activity_logs(self, limit=10):
-        try:
-            response = self.client.table("activity_logs").select("*").order("created_at", desc=True).limit(limit).execute()
-            return response.data
-        except Exception as e:
-            logging.error(f"Supabase Error get_logs: {e}")
-            return []
-
-    def set_config(self, key, value):
-        try:
-            data = {"key": key, "value": {"text": value}}
-            self.client.table("bot_state").upsert(data, on_conflict="key").execute()
-        except Exception as e:
-            logging.error(f"Supabase Error set_config: {e}")
-
-    def save_note(self, user_id, title, content):
-        try:
-            cipher = _get_cipher_suite()
-            encrypted_content = cipher.encrypt(content.encode()).decode()
-            data = {
-                "user_id": user_id,
-                "title": title,
-                "content": encrypted_content,
-                "updated_at": datetime.utcnow().isoformat()
-            }
-            self.client.table("notes").upsert(data, on_conflict="user_id, title").execute()
-            return True
-        except Exception as e:
-            logging.error(f"Supabase Error save_note: {e}")
-            return False
-
-    def get_notes_list(self, user_id):
-        try:
-            response = self.client.table("notes").select("title, updated_at").eq("user_id", user_id).execute()
-            return response.data
-        except Exception as e:
-            logging.error(f"Supabase Error get_notes_list: {e}")
-            return []
-
-    def get_note_content(self, user_id, title):
-        try:
-            response = self.client.table("notes").select("content").eq("user_id", user_id).eq("title", title).execute()
-            if response.data:
-                encrypted = response.data[0]['content']
-                cipher = _get_cipher_suite()
-                return cipher.decrypt(encrypted.encode()).decode()
-        except Exception as e:
-            logging.error(f"Supabase Error get_note_content: {e}")
-        return None
-
-    def delete_note(self, user_id, title):
-        try:
-            self.client.table("notes").delete().eq("user_id", user_id).eq("title", title).execute()
-            return True
-        except Exception as e:
-            logging.error(f"Supabase Error delete_note: {e}")
-            return False
-
-    def save_mail_session(self, user_id, email, password, token):
-        try:
-            data = {
-                "user_id": user_id,
-                "email": email,
-                "password": password,
-                "token": token,
-                "created_at": datetime.utcnow().isoformat()
-            }
-            self.client.table("temp_mail_sessions").upsert(data, on_conflict="user_id").execute()
-            return True
-        except Exception as e:
-            logging.error(f"Supabase Error save_mail_session: {e}")
-            return False
-
-    def get_mail_session(self, user_id):
-        try:
-            response = self.client.table("temp_mail_sessions").select("*").eq("user_id", user_id).execute()
-            if response.data:
-                return response.data[0]
-        except Exception as e:
-            logging.error(f"Supabase Error get_mail_session: {e}")
-        return None
-
-    def delete_mail_session(self, user_id):
-        try:
-            self.client.table("temp_mail_sessions").delete().eq("user_id", user_id).execute()
-            return True
-        except Exception as e:
-            logging.error(f"Supabase Error delete_mail_session: {e}")
-            return False
-
-    def get_all_mail_sessions(self):
-        try:
-            response = self.client.table("temp_mail_sessions").select("*").execute()
-            return response.data
-        except Exception as e:
-            logging.error(f"Supabase Error get_all_mail: {e}")
-            return []
-
-    def update_mail_last_id(self, user_id, msg_id):
-        try:
-            self.client.table("temp_mail_sessions").update({"last_msg_id": msg_id}).eq("user_id", user_id).execute()
-        except Exception as e:
-            logging.error(f"Supabase Error update_last_id: {e}")
-
-# --- MYSQL / TiDB IMPLEMENTATION ---
-class MySQLAdapter(DatabaseAdapter):
+# --- MYSQL / TiDB IMPLEMENTATION (PURE ASYNC) ---
+class AsyncMySQLAdapter(AsyncDatabaseAdapter):
     def __init__(self, host, port, user, password, db_name, ssl_ca=None):
-        import mysql.connector.pooling
         self.db_config = {
             'host': host,
             'port': port,
             'user': user,
             'password': password,
-            'database': db_name,
+            'db': db_name,
             'autocommit': True,
-            'connect_timeout': 5
+            'connect_timeout': 10,
+            'charset': 'utf8mb4',
+            'use_unicode': True
         }
         if ssl_ca and os.path.exists(ssl_ca):
-            self.db_config['ssl_ca'] = ssl_ca
-            
-        # Initialize Connection Pool
+            self.db_config['ssl'] = {'ca': ssl_ca}
+        
+        self.pool = None
+
+    async def initialize(self):
+        import aiomysql
         try:
-            self.pool = mysql.connector.pooling.MySQLConnectionPool(
-                pool_name="bot_pool",
-                pool_size=5, # Keep it small for serverless
-                pool_reset_session=True,
+            self.pool = await aiomysql.create_pool(
+                minsize=5, 
+                maxsize=20, 
+                pool_recycle=300, 
                 **self.db_config
             )
-            logging.info("✅ Menggunakan Database: TiDB (MySQL with Pooling)")
+            logging.info("✅ Menggunakan Database: TiDB (Async Pool Optimized)")
+            await self.initialize_tables()
         except Exception as e:
             logging.error(f"❌ Failed creating DB Pool: {e}")
             raise e
 
-        self.initialize_tables()
-
-    def get_connection(self):
-        # Get connection from pool
-        return self.pool.get_connection()
-
-    def initialize_tables(self):
-        """Buat tabel jika belum ada."""
+    async def initialize_tables(self):
         queries = [
             """CREATE TABLE IF NOT EXISTS users (
                 user_id BIGINT PRIMARY KEY,
                 username VARCHAR(255),
                 first_name VARCHAR(255),
-                last_seen DATETIME
+                last_seen DATETIME,
+                INDEX idx_last_seen (last_seen)
             )""",
             """CREATE TABLE IF NOT EXISTS admins (
                 user_id BIGINT PRIMARY KEY,
@@ -373,7 +188,8 @@ class MySQLAdapter(DatabaseAdapter):
                 username VARCHAR(255),
                 action VARCHAR(50),
                 details TEXT,
-                created_at DATETIME
+                created_at DATETIME,
+                INDEX idx_created (created_at)
             )""",
             """CREATE TABLE IF NOT EXISTS notes (
                 id INT AUTO_INCREMENT PRIMARY KEY,
@@ -381,7 +197,8 @@ class MySQLAdapter(DatabaseAdapter):
                 title VARCHAR(100),
                 content TEXT,
                 updated_at DATETIME,
-                UNIQUE KEY unique_note (user_id, title)
+                UNIQUE KEY unique_note (user_id, title),
+                INDEX idx_user_note (user_id)
             )""",
             """CREATE TABLE IF NOT EXISTS temp_mail_sessions (
                 user_id BIGINT PRIMARY KEY,
@@ -389,349 +206,201 @@ class MySQLAdapter(DatabaseAdapter):
                 password VARCHAR(255),
                 token VARCHAR(500),
                 last_msg_id VARCHAR(100),
-                created_at DATETIME
+                next_check_at DATETIME,
+                created_at DATETIME,
+                INDEX idx_next_check (next_check_at)
             )"""
         ]
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                for q in queries:
+                    await cur.execute(q)
+                
+                # Manual Migration
+                try:
+                    await cur.execute("ALTER TABLE temp_mail_sessions ADD COLUMN next_check_at DATETIME DEFAULT NOW()")
+                    await cur.execute("CREATE INDEX idx_next_check ON temp_mail_sessions(next_check_at)")
+                except: pass
+
+    async def _exec(self, query, args=None, fetch=False, fetch_one=False, dict_cursor=False):
+        """Internal helper for metrics and execution."""
+        start_time = time.time()
         try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            for q in queries:
-                cursor.execute(q)
+            import aiomysql
+            cursor_cls = aiomysql.DictCursor if dict_cursor else aiomysql.Cursor
             
-            # Ensure last_msg_id exists (migration for existing table)
-            try:
-                cursor.execute("ALTER TABLE temp_mail_sessions ADD COLUMN last_msg_id VARCHAR(100)")
-            except: pass 
-            
-            conn.close()
+            async with self.pool.acquire() as conn:
+                async with conn.cursor(cursor_cls) as cur:
+                    await cur.execute(query, args)
+                    if fetch:
+                        return await cur.fetchall()
+                    if fetch_one:
+                        return await cur.fetchone()
+                    return cur.rowcount
         except Exception as e:
-            logging.error(f"TiDB Init Error: {e}")
+            self.metrics['errors'] += 1
+            logging.error(f"DB Query Error: {e} | Query: {query[:50]}...")
+            return None
+        finally:
+            self.metrics['count'] += 1
+            self.metrics['latency_sum'] += (time.time() - start_time)
 
-    def save_user(self, user_id, username=None, first_name=None):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            sql = """INSERT INTO users (user_id, username, first_name, last_seen) 
-                     VALUES (%s, %s, %s, NOW()) 
-                     ON DUPLICATE KEY UPDATE username=%s, first_name=%s, last_seen=NOW()"""
-            cursor.execute(sql, (user_id, username, first_name, username, first_name))
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error save_user: {e}")
+    # --- USER MANAGEMENT ---
+    
+    async def save_user(self, user_id, username=None, first_name=None):
+        sql = """INSERT INTO users (user_id, username, first_name, last_seen) 
+                 VALUES (%s, %s, %s, NOW()) 
+                 ON DUPLICATE KEY UPDATE username=%s, first_name=%s, last_seen=NOW()"""
+        await self._exec(sql, (user_id, username, first_name, username, first_name))
 
-    def get_all_users(self):
-        users = []
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM users")
-            users = [row[0] for row in cursor.fetchall()]
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error get_all_users: {e}")
-        return users
+    async def get_users_batch(self, last_id=0, limit=100):
+        rows = await self._exec("SELECT user_id FROM users WHERE user_id > %s ORDER BY user_id ASC LIMIT %s", (last_id, limit), fetch=True)
+        return [row[0] for row in rows] if rows else []
 
-    def get_users_count(self):
-        count = 0
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*) FROM users")
-            count = cursor.fetchone()[0]
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error get_users_count: {e}")
-        return count
+    async def get_users_count(self):
+        row = await self._exec("SELECT COUNT(1) FROM users", fetch_one=True)
+        return row[0] if row else 0
 
-    def get_user_info(self, user_id):
-        data = None
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT * FROM users WHERE user_id = %s", (user_id,))
-            data = cursor.fetchone()
-            conn.close()
-            if data and 'last_seen' in data and data['last_seen']:
-                 data['last_seen'] = data['last_seen'].isoformat()
-        except Exception as e:
-            logging.error(f"MySQL Error get_user_info: {e}")
+    async def get_user_info(self, user_id):
+        data = await self._exec("SELECT * FROM users WHERE user_id = %s", (user_id,), fetch_one=True, dict_cursor=True)
+        if data and 'last_seen' in data and data['last_seen']:
+            data['last_seen'] = data['last_seen'].isoformat()
         return data
 
-    def get_admins(self, owner_id):
-        # Cache Check
-        if time.time() < _CACHE_ADMINS["expiry"]:
-            return _CACHE_ADMINS["data"]
+    # --- ADMIN & BANNED ---
+
+    async def get_admins(self, owner_id):
+        cached = await cache.get("admins")
+        if cached: return set(cached)
 
         admins = {int(owner_id)}
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM admins")
-            for row in cursor.fetchall():
-                admins.add(int(row[0]))
-            conn.close()
-            
-            # Cache Update
-            _CACHE_ADMINS["data"] = admins
-            _CACHE_ADMINS["expiry"] = time.time() + CACHE_TTL
-        except Exception as e:
-            logging.error(f"MySQL Error get_admins: {e}")
+        rows = await self._exec("SELECT user_id FROM admins", fetch=True)
+        if rows:
+            for row in rows: admins.add(int(row[0]))
+        await cache.set("admins", admins, CACHE_TTL)
         return admins
 
-    def add_admin(self, user_id, username=None):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            sql = "INSERT IGNORE INTO admins (user_id, username, promoted_at) VALUES (%s, %s, NOW())"
-            cursor.execute(sql, (user_id, username))
-            affected = cursor.rowcount
-            conn.close()
-            invalidate_cache("admins") # Reset Cache
-            return affected > 0
-        except Exception as e:
-            logging.error(f"MySQL Error add_admin: {e}")
-            return False
+    async def add_admin(self, user_id, username=None):
+        affected = await self._exec("INSERT IGNORE INTO admins (user_id, username, promoted_at) VALUES (%s, %s, NOW())", (user_id, username))
+        await cache.delete("admins")
+        return affected and affected > 0
 
-    def remove_admin(self, user_id):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM admins WHERE user_id = %s", (user_id,))
-            conn.close()
-            invalidate_cache("admins") # Reset Cache
-            return True
-        except Exception as e:
-            logging.error(f"MySQL Error remove_admin: {e}")
-            return False
+    async def remove_admin(self, user_id):
+        await self._exec("DELETE FROM admins WHERE user_id = %s", (user_id,))
+        await cache.delete("admins")
+        return True
 
-    def get_banned(self):
-        # Cache Check
-        if time.time() < _CACHE_BANNED["expiry"]:
-            return _CACHE_BANNED["data"]
+    async def get_banned(self):
+        cached = await cache.get("banned")
+        if cached: return set(cached)
             
         banned = set()
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT user_id FROM banned")
-            for row in cursor.fetchall():
-                banned.add(str(row[0]))
-            conn.close()
-            
-            # Cache Update
-            _CACHE_BANNED["data"] = banned
-            _CACHE_BANNED["expiry"] = time.time() + CACHE_TTL
-        except Exception as e:
-            logging.error(f"MySQL Error get_banned: {e}")
+        rows = await self._exec("SELECT user_id FROM banned", fetch=True)
+        if rows:
+            for row in rows: banned.add(str(row[0]))
+        await cache.set("banned", banned, CACHE_TTL)
         return banned
 
-    def ban_user(self, user_id, username=None, reason="Admin Ban"):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            sql = """INSERT INTO banned (user_id, username, reason, banned_at) 
-                     VALUES (%s, %s, %s, NOW())
-                     ON DUPLICATE KEY UPDATE reason=%s, banned_at=NOW()"""
-            cursor.execute(sql, (user_id, username, reason, reason))
-            conn.close()
-            invalidate_cache("banned") # Reset Cache
-            return True
-        except Exception as e:
-            logging.error(f"MySQL Error ban_user: {e}")
-            return False
+    async def ban_user(self, user_id, username=None, reason="Admin Ban"):
+        sql = """INSERT INTO banned (user_id, username, reason, banned_at) 
+                 VALUES (%s, %s, %s, NOW())
+                 ON DUPLICATE KEY UPDATE reason=%s, banned_at=NOW()"""
+        await self._exec(sql, (user_id, username, reason, reason))
+        await cache.delete("banned")
+        return True
 
-    def unban_user(self, user_id):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM banned WHERE user_id = %s", (user_id,))
-            conn.close()
-            invalidate_cache("banned") # Reset Cache
-            return True
-        except Exception as e:
-            logging.error(f"MySQL Error unban_user: {e}")
-            return False
+    async def unban_user(self, user_id):
+        await self._exec("DELETE FROM banned WHERE user_id = %s", (user_id,))
+        await cache.delete("banned")
+        return True
 
-    def save_state(self, state_data):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            val_str = json.dumps(state_data)
-            sql = "INSERT INTO bot_state (`key`, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s"
-            cursor.execute(sql, ("bot_config", val_str, val_str))
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error save_state: {e}")
+    # --- STATE & LOGS ---
 
-    def load_state(self):
-        state = {}
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT value FROM bot_state WHERE `key` = 'bot_config'")
-            row = cursor.fetchone()
-            if row:
-                val = row[0]
-                if isinstance(val, str):
-                    state = json.loads(val)
-                else:
-                    state = val
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error load_state: {e}")
-        return state
+    async def save_state(self, state_data):
+        val_str = json.dumps(state_data)
+        sql = "INSERT INTO bot_state (`key`, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s"
+        await self._exec(sql, ("bot_config", val_str, val_str))
 
-    def log_activity(self, admin_id, username, action, details):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            sql = "INSERT INTO activity_logs (admin_id, username, action, details, created_at) VALUES (%s, %s, %s, %s, NOW())"
-            cursor.execute(sql, (admin_id, username, action, details))
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error log_activity: {e}")
+    async def load_state(self):
+        row = await self._exec("SELECT value FROM bot_state WHERE `key` = 'bot_config'", fetch_one=True)
+        if row:
+            val = row[0]
+            return json.loads(val) if isinstance(val, str) else val
+        return {}
 
-    def get_activity_logs(self, limit=10):
-        logs = []
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT %s", (limit,))
-            logs = cursor.fetchall()
+    async def log_activity(self, admin_id, username, action, details):
+        sql = "INSERT INTO activity_logs (admin_id, username, action, details, created_at) VALUES (%s, %s, %s, %s, NOW())"
+        await self._exec(sql, (admin_id, username, action, details))
+
+    async def get_activity_logs(self, limit=10):
+        sql = "SELECT id, admin_id, username, action, details, created_at FROM activity_logs ORDER BY created_at DESC LIMIT %s"
+        logs = await self._exec(sql, (limit,), fetch=True, dict_cursor=True)
+        if logs:
             for log in logs:
-                if 'created_at' in log:
-                    log['created_at'] = log['created_at'].isoformat()
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error get_logs: {e}")
-        return logs
+                if 'created_at' in log: log['created_at'] = log['created_at'].isoformat()
+        return logs or []
 
-    def set_config(self, key, value):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            val_json = json.dumps({"text": value})
-            sql = "INSERT INTO bot_state (`key`, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s"
-            cursor.execute(sql, (key, val_json, val_json))
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error set_config: {e}")
+    async def set_config(self, key, value):
+        val_json = json.dumps({"text": value})
+        sql = "INSERT INTO bot_state (`key`, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s"
+        await self._exec(sql, (key, val_json, val_json))
 
-    def save_note(self, user_id, title, content):
-        try:
+    # --- NOTES ---
+
+    async def save_note(self, user_id, title, content):
+        cipher = _get_cipher_suite()
+        encrypted_content = cipher.encrypt(content.encode()).decode()
+        sql = """INSERT INTO notes (user_id, title, content, updated_at) 
+                 VALUES (%s, %s, %s, NOW())
+                 ON DUPLICATE KEY UPDATE content=%s, updated_at=NOW()"""
+        await self._exec(sql, (user_id, title, encrypted_content, encrypted_content))
+        return True
+
+    async def get_notes_list(self, user_id):
+        return await self._exec("SELECT title, updated_at FROM notes WHERE user_id = %s", (user_id,), fetch=True, dict_cursor=True) or []
+
+    async def get_note_content(self, user_id, title):
+        row = await self._exec("SELECT content FROM notes WHERE user_id = %s AND title = %s", (user_id, title), fetch_one=True)
+        if row:
             cipher = _get_cipher_suite()
-            encrypted_content = cipher.encrypt(content.encode()).decode()
-            
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            sql = """INSERT INTO notes (user_id, title, content, updated_at) 
-                     VALUES (%s, %s, %s, NOW())
-                     ON DUPLICATE KEY UPDATE content=%s, updated_at=NOW()"""
-            cursor.execute(sql, (user_id, title, encrypted_content, encrypted_content))
-            conn.close()
-            return True
-        except Exception as e:
-            logging.error(f"MySQL Error save_note: {e}")
-            return False
-
-    def get_notes_list(self, user_id):
-        notes = []
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT title, updated_at FROM notes WHERE user_id = %s", (user_id,))
-            notes = cursor.fetchall()
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error get_notes_list: {e}")
-        return notes
-
-    def get_note_content(self, user_id, title):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT content FROM notes WHERE user_id = %s AND title = %s", (user_id, title))
-            row = cursor.fetchone()
-            conn.close()
-            if row:
-                encrypted = row[0]
-                cipher = _get_cipher_suite()
-                return cipher.decrypt(encrypted.encode()).decode()
-        except Exception as e:
-            logging.error(f"MySQL Error get_note_content: {e}")
+            return cipher.decrypt(row[0].encode()).decode()
         return None
 
-    def delete_note(self, user_id, title):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM notes WHERE user_id = %s AND title = %s", (user_id, title))
-            affected = cursor.rowcount
-            conn.close()
-            return affected > 0
-        except Exception as e:
-            logging.error(f"MySQL Error delete_note: {e}")
-            return False
+    async def delete_note(self, user_id, title):
+        affected = await self._exec("DELETE FROM notes WHERE user_id = %s AND title = %s", (user_id, title))
+        return affected and affected > 0
 
-    def save_mail_session(self, user_id, email, password, token):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            sql = """INSERT INTO temp_mail_sessions (user_id, email, password, token, created_at) 
-                     VALUES (%s, %s, %s, %s, NOW())
-                     ON DUPLICATE KEY UPDATE email=%s, password=%s, token=%s, created_at=NOW()"""
-            cursor.execute(sql, (user_id, email, password, token, email, password, token))
-            conn.close()
-            return True
-        except Exception as e:
-            logging.error(f"MySQL Error save_mail_session: {e}")
-            return False
+    # --- MAIL SESSIONS (ADAPTIVE) ---
 
-    def get_mail_session(self, user_id):
-        data = None
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT * FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
-            data = cursor.fetchone()
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error get_mail_session: {e}")
-        return data
+    async def save_mail_session(self, user_id, email, password, token):
+        sql = """INSERT INTO temp_mail_sessions (user_id, email, password, token, created_at, next_check_at) 
+                 VALUES (%s, %s, %s, %s, NOW(), NOW())
+                 ON DUPLICATE KEY UPDATE email=%s, password=%s, token=%s, created_at=NOW(), next_check_at=NOW()"""
+        await self._exec(sql, (user_id, email, password, token, email, password, token))
+        return True
 
-    def delete_mail_session(self, user_id):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("DELETE FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
-            conn.close()
-            return True
-        except Exception as e:
-            logging.error(f"MySQL Error delete_mail_session: {e}")
-            return False
+    async def get_mail_session(self, user_id):
+        return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = %s", (user_id,), fetch_one=True, dict_cursor=True)
 
-    def get_all_mail_sessions(self):
-        data = []
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor(dictionary=True)
-            cursor.execute("SELECT * FROM temp_mail_sessions")
-            data = cursor.fetchall()
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error get_all_mail: {e}")
-        return data
+    async def delete_mail_session(self, user_id):
+        await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
+        return True
 
-    def update_mail_last_id(self, user_id, msg_id):
-        try:
-            conn = self.get_connection()
-            cursor = conn.cursor()
-            cursor.execute("UPDATE temp_mail_sessions SET last_msg_id = %s WHERE user_id = %s", (msg_id, user_id))
-            conn.close()
-        except Exception as e:
-            logging.error(f"MySQL Error update_last_id: {e}")
+    async def get_pending_mail_sessions(self, limit=50):
+        # Fetch sessions where next_check_at is in the past
+        return await self._exec("SELECT user_id, token, last_msg_id FROM temp_mail_sessions WHERE next_check_at <= NOW() LIMIT %s", (limit,), fetch=True, dict_cursor=True) or []
 
-# --- UTILS & INITIALIZATION ---
+    async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None):
+        next_dt = datetime.fromtimestamp(next_check_timestamp)
+        if last_msg_id:
+            await self._exec("UPDATE temp_mail_sessions SET next_check_at = %s, last_msg_id = %s WHERE user_id = %s", (next_dt, last_msg_id, user_id))
+        else:
+            await self._exec("UPDATE temp_mail_sessions SET next_check_at = %s WHERE user_id = %s", (next_dt, user_id))
+
+    async def update_mail_last_id(self, user_id, msg_id):
+        await self.update_mail_check_time(user_id, time.time(), msg_id)
+
+# --- UTILS ---
 
 def _get_cipher_suite():
     secret = os.getenv("SECRET_KEY", "DefaultSecretKeyShouldBeChangedForProd123")
@@ -739,110 +408,62 @@ def _get_cipher_suite():
     encoded_key = base64.urlsafe_b64encode(key_bytes)
     return Fernet(encoded_key)
 
-# Global Adapter Instance
-adapter: DatabaseAdapter = None
+# Global Adapter
+adapter: AsyncDatabaseAdapter = None
 
-# Environment Config
+# Env Config
 TIDB_HOST = os.getenv("TIDB_HOST")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 
-if TIDB_HOST:
-    try:
-        logging.info("⚙️ Mendeteksi konfigurasi TiDB...")
-        adapter = MySQLAdapter(
-            host=TIDB_HOST,
-            port=int(os.getenv("TIDB_PORT", 4000)),
-            user=os.getenv("TIDB_USER"),
-            password=os.getenv("TIDB_PASSWORD"),
-            db_name=os.getenv("TIDB_DB_NAME", "test"),
-            ssl_ca=os.getenv("TIDB_CA_PATH", "isrgrootx1.pem")
-        )
-    except Exception as e:
-        logging.error(f"❌ Gagal inisialisasi TiDB: {e}")
+async def init_db():
+    global adapter
+    if TIDB_HOST:
+        try:
+            logging.info("⚙️ Connecting to TiDB (Async)...")
+            adapter = AsyncMySQLAdapter(
+                host=TIDB_HOST,
+                port=int(os.getenv("TIDB_PORT", 4000)),
+                user=os.getenv("TIDB_USER"),
+                password=os.getenv("TIDB_PASSWORD"),
+                db_name=os.getenv("TIDB_DB_NAME", "test"),
+                ssl_ca=os.getenv("TIDB_CA_PATH", "isrgrootx1.pem")
+            )
+            await adapter.initialize()
+        except Exception as e:
+            logging.error(f"❌ TiDB Async Init Failed: {e}")
 
-if not adapter and SUPABASE_URL:
-    try:
-        logging.info("⚙️ Mendeteksi konfigurasi Supabase...")
-        adapter = SupabaseAdapter(
-            url=SUPABASE_URL,
-            key=os.getenv("SUPABASE_KEY")
-        )
-    except Exception as e:
-        logging.error(f"❌ Gagal inisialisasi Supabase: {e}")
+    if not adapter and SUPABASE_URL:
+        try:
+            adapter = AsyncSupabaseAdapter(url=SUPABASE_URL, key=os.getenv("SUPABASE_KEY"))
+        except: pass
 
-if not adapter:
-    logging.warning("⚠️ TIDAK ADA DATABASE YANG TERHUBUNG! Bot berjalan dengan fitur terbatas.")
-    adapter = DatabaseAdapter() # Dummy adapter that does nothing
+    if not adapter:
+        adapter = AsyncDatabaseAdapter() # Dummy
 
-# --- EXPOSED FUNCTIONS (INTERFACE) ---
-def db_save_user(user_id, username=None, first_name=None):
-    return adapter.save_user(user_id, username, first_name)
-
-def db_get_all_users():
-    return adapter.get_all_users()
-
-def db_get_users_count():
-    return adapter.get_users_count()
-
-def db_get_user_info(user_id):
-    return adapter.get_user_info(user_id)
-
-def db_get_admins(owner_id):
-    return adapter.get_admins(owner_id)
-
-def db_add_admin(user_id, username=None):
-    return adapter.add_admin(user_id, username)
-
-def db_remove_admin(user_id):
-    return adapter.remove_admin(user_id)
-
-def db_get_banned():
-    return adapter.get_banned()
-
-def db_ban_user(user_id, username=None, reason="Admin Ban"):
-    return adapter.ban_user(user_id, username, reason)
-
-def db_unban_user(user_id):
-    return adapter.unban_user(user_id)
-
-def db_save_state(state_data):
-    return adapter.save_state(state_data)
-
-def db_load_state():
-    return adapter.load_state()
-
-def db_log_activity(admin_id, username, action, details):
-    return adapter.log_activity(admin_id, username, action, details)
-
-def db_get_activity_logs(limit=10):
-    return adapter.get_activity_logs(limit)
-
-def db_set_config(key, value):
-    return adapter.set_config(key, value)
-
-def db_save_note(user_id, title, content):
-    return adapter.save_note(user_id, title, content)
-
-def db_get_notes_list(user_id):
-    return adapter.get_notes_list(user_id)
-
-def db_get_note_content(user_id, title):
-    return adapter.get_note_content(user_id, title)
-
-def db_delete_note(user_id, title):
-    return adapter.delete_note(user_id, title)
-
-def db_save_mail_session(user_id, email, password, token):
-    return adapter.save_mail_session(user_id, email, password, token)
-
-def db_get_mail_session(user_id):
-    return adapter.get_mail_session(user_id)
-
-def db_delete_mail_session(user_id):
-    return adapter.delete_mail_session(user_id)
-
-def db_get_all_mail_sessions():
-    return adapter.get_all_mail_sessions()
-
-def db_update_mail_last_id(user_id, msg_id):
-    return adapter.update_mail_last_id(user_id, msg_id)
+# --- WRAPPER FUNCTIONS (NOW NATIVE ASYNC) ---
+async def db_save_user(user_id, username=None, first_name=None): return await adapter.save_user(user_id, username, first_name)
+async def db_get_users_batch(last_id=0, limit=100): return await adapter.get_users_batch(last_id, limit)
+async def db_get_users_count(): return await adapter.get_users_count()
+async def db_get_user_info(user_id): return await adapter.get_user_info(user_id)
+async def db_get_admins(owner_id): return await adapter.get_admins(owner_id)
+async def db_add_admin(user_id, username=None): return await adapter.add_admin(user_id, username)
+async def db_remove_admin(user_id): return await adapter.remove_admin(user_id)
+async def db_get_banned(): return await adapter.get_banned()
+async def db_ban_user(user_id, username=None, reason="Admin Ban"): return await adapter.ban_user(user_id, username, reason)
+async def db_unban_user(user_id): return await adapter.unban_user(user_id)
+async def db_save_state(state_data): return await adapter.save_state(state_data)
+async def db_load_state(): return await adapter.load_state()
+async def db_log_activity(admin_id, username, action, details): return await adapter.log_activity(admin_id, username, action, details)
+async def db_get_activity_logs(limit=10): return await adapter.get_activity_logs(limit)
+async def db_set_config(key, value): return await adapter.set_config(key, value)
+async def db_save_note(user_id, title, content): return await adapter.save_note(user_id, title, content)
+async def db_get_notes_list(user_id): return await adapter.get_notes_list(user_id)
+async def db_get_note_content(user_id, title): return await adapter.get_note_content(user_id, title)
+async def db_delete_note(user_id, title): return await adapter.delete_note(user_id, title)
+async def db_save_mail_session(user_id, email, password, token): return await adapter.save_mail_session(user_id, email, password, token)
+async def db_get_mail_session(user_id): return await adapter.get_mail_session(user_id)
+async def db_delete_mail_session(user_id): return await adapter.delete_mail_session(user_id)
+async def db_get_pending_mail_sessions(limit=50): return await adapter.get_pending_mail_sessions(limit)
+async def db_update_mail_check_time(user_id, next_ts, last_msg_id=None): return await adapter.update_mail_check_time(user_id, next_ts, last_msg_id)
+async def db_update_mail_last_id(user_id, msg_id): return await adapter.update_mail_last_id(user_id, msg_id)
+async def db_get_metrics(): return adapter.metrics if adapter else {}
