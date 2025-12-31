@@ -3517,8 +3517,20 @@ async def auto_check_mail():
             
         await asyncio.sleep(15) # Check every 15 seconds
 
+async def on_startup(dp):
+    # Try to set commands with retry logic
+    for i in range(10):
+        try:
+            await set_default_commands(dp)
+            logging.info("Default commands set successfully.")
+            break
+        except Exception as e:
+            logging.error(f"Network error on startup (Attempt {i+1}/10): {e}")
+            await asyncio.sleep(5)
+    
+    # Start background task
+    asyncio.create_task(auto_check_mail())
+
 if __name__ == '__main__':
     initialize_bot_info()
-    loop.run_until_complete(set_default_commands(dp))
-    loop.create_task(auto_check_mail()) # Start background task
-    executor.start_polling(dp, skip_updates=True, loop=loop)
+    executor.start_polling(dp, skip_updates=True, loop=loop, on_startup=on_startup)
