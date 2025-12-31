@@ -2019,27 +2019,6 @@ async def process_dynamic_reply_button(message: types.Message, state: FSMContext
         await info(fake_msg)
     else:
         await message.reply("⚠️ Aksi tidak dikenal.")
-        await gen_mail(fake_msg)
-    elif action == 'note':
-        # Call notes menu directly
-        fake_msg = message
-        fake_msg.text = "/note"
-        await cmd_notes(fake_msg)
-    elif action == 'fake':
-        # Show fake ID menu
-        fake_msg = message
-        fake_msg.text = "/fake"
-        await fake_identity(fake_msg)
-    elif action == 'iban':
-        fake_msg = message
-        fake_msg.text = "/iban"
-        await cmd_iban(fake_msg)
-    elif action == 'info':
-        fake_msg = message
-        fake_msg.text = "/info"
-        await info(fake_msg)
-    else:
-        await message.reply("⚠️ Aksi tidak dikenal.")
 
 
 @dp.message_handler(commands=['info', 'id'], commands_prefix=PREFIX)
@@ -3037,27 +3016,14 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     if len(parts) > 2:
         mode = parts[2]
 
-    saved = SAVED_MAILS.get(user_id, [])
-    
-    # AUTO-RESTORE LOGIC: Restore active session from DB if RAM is empty
-    # This ensures at least the currently active mail is visible
-    if not saved:
-        db_sess = await db.db_get_mail_session(user_id)
-        if db_sess:
-             # Reconstruct session object
-             restored = {
-                 "email": db_sess['email'],
-                 "password": db_sess['password'],
-                 "token": db_sess['token']
-             }
-             SAVED_MAILS[user_id] = [restored]
-             saved = SAVED_MAILS[user_id]
+    # Use Database as Source of Truth
+    saved = await db.db_get_mail_sessions_list(user_id, limit=20) # Get last 20 emails
 
     if not saved:
         return await callback_query.message.edit_text(
-            "⚠️ <b>Riwayat akun kosong.</b>\nRiwayat hilang saat bot restart. Silakan Login ulang atau Buat Baru.",
+            "⚠️ <b>Riwayat akun kosong.</b>\nRiwayat disimpan di database. Silakan Buat Baru.",
             reply_markup=types.InlineKeyboardMarkup().add(
-                types.InlineKeyboardButton("🔑 Login Akun Lama", callback_data="m_mail_login"),
+                types.InlineKeyboardButton("🎲 Buat Random", callback_data="m_mail_create"),
                 types.InlineKeyboardButton("🔙 Menu Temp Mail", callback_data="m_mail")
             )
         )
@@ -3074,7 +3040,19 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     end_idx = start_idx + MAX_PER_PAGE
     current_page_items = saved[start_idx:end_idx]
     
-    # Get Active Session from DB
+    # Get Active Session from DB (Single Active)
+    # The new schema allows multiple, but we still treat one as "active" in RAM or via checking?
+    # Actually, the user asked for "Ganti Akun Email".
+    # We can check which one is active if we store "active" flag, or just assume the latest one or similar.
+    # But `db_get_mail_session` returns "one" session. Which one?
+    # In `AsyncMySQLAdapter.get_mail_session`, it does `SELECT * FROM temp_mail_sessions WHERE user_id = %s`.
+    # If there are multiple rows, it returns the first one found (fetch_one).
+    # This might be ambiguous if we have multiple.
+    # But for now, let's assume `db_get_mail_session` returns *a* session.
+    # Ideally we should have an `is_active` flag, but the schema update was just ID change.
+    # Let's check `get_mail_session` implementation again.
+    # It returns `fetch_one`.
+    
     sess = await db.db_get_mail_session(user_id)
     current_email = sess['email'] if sess else ''
     
@@ -3088,10 +3066,23 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
         
         if mode == "del":
             btn_text = f"🗑 Hapus: {email}"
-            cb_data = f"dm_mail_{actual_idx}_{page}"
+            # We need to pass ID for deletion now, or email. ID is better.
+            # But callback data limit.
+            # Let's try to use index from the list (RAM dependent) or just use ID if we have it.
+            # The new schema has `id`.
+            mail_id = data.get('id')
+            if mail_id:
+                cb_data = f"dm_mail_id_{mail_id}_{page}"
+            else:
+                # Fallback to index if ID not available (should be there)
+                cb_data = f"dm_mail_{actual_idx}_{page}"
         else:
             btn_text = f"{is_active}{email}"
-            cb_data = f"sw_mail_{actual_idx}_{page}"
+            mail_id = data.get('id')
+            if mail_id:
+                cb_data = f"sw_mail_id_{mail_id}_{page}"
+            else:
+                cb_data = f"sw_mail_{actual_idx}_{page}"
             
         kb.add(types.InlineKeyboardButton(btn_text, callback_data=cb_data))
     
@@ -3127,45 +3118,33 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
         pass 
     await callback_query.answer()
 
-@dp.callback_query_handler(lambda c: c.data.startswith('dm_mail_'))
+@dp.callback_query_handler(lambda c: c.data.startswith('dm_mail'))
 async def delete_saved_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     parts = callback_query.data.split('_')
-    # Format: dm_mail_{index}_{page}
+    # Format: dm_mail_id_{id}_{page}
     
-    try:
-        idx = int(parts[2])
-        page = int(parts[3])
-    except:
-        return await callback_query.answer("Error data.")
+    mail_id = None
+    page = 0
+    
+    if 'id' in parts:
+        try:
+            mail_id = int(parts[3])
+            page = int(parts[4])
+        except: pass
+    else:
+        return await callback_query.answer("Mode lama tidak didukung.", show_alert=True)
         
-    saved = SAVED_MAILS.get(user_id, [])
-    if idx < 0 or idx >= len(saved):
-        return await callback_query.answer("Data tidak ditemukan.", show_alert=True)
-    
-    # Get email to be deleted
-    deleted_email = saved[idx]['email']
-    
-    # Check if active
-    current = db.db_get_mail_session(user_id) or {}
-    if current.get('email') == deleted_email:
-        # Clear active session if we delete the active one
-        db.db_delete_mail_session(user_id)
+    if not mail_id:
+        return await callback_query.answer("Error ID.")
         
-    # Delete from list
-    saved.pop(idx)
-    SAVED_MAILS[user_id] = saved
-    
-    await callback_query.answer(f"🗑 {deleted_email} dihapus.")
-    
-    # Refresh list (stay in delete mode)
-    # Redirect to list handler
-    # Note: indices shift after delete, but we refresh the list so it should be fine.
-    # However, if we are on the last item of a page, we might need to adjust page?
-    # The list handler handles page >= total_pages adjustment.
-    
-    callback_query.data = f"m_mail_list:{page}:del"
-    await list_emails_callback(callback_query)
+    if await db.db_delete_mail_session(user_id, mail_id):
+        await callback_query.answer("🗑 Akun dihapus.")
+        # Refresh list
+        callback_query.data = f"m_mail_list:{page}:del"
+        await list_emails_callback(callback_query)
+    else:
+        await callback_query.answer("Gagal menghapus.", show_alert=True)
 
 
 @dp.message_handler(commands=['emails', 'listmail'], commands_prefix=PREFIX)
@@ -3225,35 +3204,39 @@ async def list_emails(message: types.Message):
         reply_markup=kb
     )
 
-@dp.callback_query_handler(lambda c: c.data.startswith('sw_mail_'))
+@dp.callback_query_handler(lambda c: c.data.startswith('sw_mail'))
 async def switch_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
+    
+    # Format: sw_mail_id_{id}_{page} OR sw_mail_{index}_{page}
     parts = callback_query.data.split('_')
-    # Format: sw_mail_{index}_{page}
     
-    try:
-        idx = int(parts[2])
-        page = int(parts[3]) if len(parts) > 3 else 0
-    except ValueError:
-        return await callback_query.answer("Error data.")
+    mail_id = None
+    page = 0
+    
+    if 'id' in parts:
+        try:
+            mail_id = int(parts[3])
+            page = int(parts[4])
+        except: pass
+    else:
+        # Legacy/RAM index support (best effort)
+        return await callback_query.answer("Mode lama tidak didukung. Silakan refresh list.", show_alert=True)
 
-    saved = SAVED_MAILS.get(user_id, [])
-    
-    if idx < 0 or idx >= len(saved):
-        return await bot.answer_callback_query(callback_query.id, "⚠️ Data tidak ditemukan/kadaluarsa.", show_alert=True)
-        
-    selected_account = saved[idx]
-    
-    # Set as Active in DB
-    await db.db_save_mail_session(user_id, selected_account['email'], selected_account['password'], selected_account['token'])
-    
-    email = selected_account['email']
-    
-    await bot.answer_callback_query(callback_query.id, f"✅ Akun aktif: {email}")
-    
-    # Force Refresh List UI
-    callback_query.data = f"m_mail_list:{page}:view"
-    await list_emails_callback(callback_query)
+    if not mail_id:
+        return await callback_query.answer("ID Akun tidak valid.")
+
+    # Set as Active (Touch)
+    if await db.db_touch_mail_session(user_id, mail_id):
+        await bot.answer_callback_query(callback_query.id, "✅ Akun diaktifkan!")
+        # Force Refresh List UI
+        # Construct callback data to trigger list refresh
+        # We can't change callback_query.data and call list_emails_callback directly easily if args differ?
+        # Actually we can call it if we mock the data.
+        callback_query.data = f"m_mail_list:{page}:view"
+        await list_emails_callback(callback_query)
+    else:
+        await callback_query.answer("Gagal mengaktifkan akun.", show_alert=True)
 
 
 # Handler for 'ignore' callback (static buttons)

@@ -99,6 +99,7 @@ class AsyncDatabaseAdapter:
     async def save_mail_session(self, user_id, email, password, token): pass
     async def get_mail_session(self, user_id): return None
     async def delete_mail_session(self, user_id): return False
+    async def get_mail_sessions_list(self, user_id, limit=10): return []
     async def get_pending_mail_sessions(self, limit=50): return []
     async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None): pass
     
@@ -394,11 +395,23 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
         return True
 
     async def get_mail_session(self, user_id):
-        return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = %s", (user_id,), fetch_one=True, dict_cursor=True)
+        return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = %s ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
 
-    async def delete_mail_session(self, user_id):
-        await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
+    async def touch_mail_session(self, user_id, mail_id):
+        # Bring to top (Active)
+        await self._exec("UPDATE temp_mail_sessions SET created_at = NOW() WHERE user_id = %s AND id = %s", (user_id, mail_id))
         return True
+
+    async def delete_mail_session(self, user_id, mail_id=None):
+        if mail_id:
+            await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s AND id = %s", (user_id, mail_id))
+        else:
+            await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
+        return True
+
+    async def get_mail_sessions_list(self, user_id, limit=10):
+        # Return list of dicts: email, token, etc.
+        return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = %s ORDER BY created_at DESC LIMIT %s", (user_id, limit), fetch=True, dict_cursor=True) or []
 
     async def get_pending_mail_sessions(self, limit=50):
         # Fetch sessions where next_check_at is in the past
@@ -476,7 +489,9 @@ async def db_get_note_content(user_id, title): return await adapter.get_note_con
 async def db_delete_note(user_id, title): return await adapter.delete_note(user_id, title)
 async def db_save_mail_session(user_id, email, password, token): return await adapter.save_mail_session(user_id, email, password, token)
 async def db_get_mail_session(user_id): return await adapter.get_mail_session(user_id)
-async def db_delete_mail_session(user_id): return await adapter.delete_mail_session(user_id)
+async def db_delete_mail_session(user_id, mail_id=None): return await adapter.delete_mail_session(user_id, mail_id)
+async def db_touch_mail_session(user_id, mail_id): return await adapter.touch_mail_session(user_id, mail_id)
+async def db_get_mail_sessions_list(user_id, limit=10): return await adapter.get_mail_sessions_list(user_id, limit)
 async def db_get_pending_mail_sessions(limit=50): return await adapter.get_pending_mail_sessions(limit)
 async def db_update_mail_check_time(user_id, next_ts, last_msg_id=None): return await adapter.update_mail_check_time(user_id, next_ts, last_msg_id)
 async def db_update_mail_last_id(user_id, msg_id): return await adapter.update_mail_last_id(user_id, msg_id)
