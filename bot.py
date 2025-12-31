@@ -801,7 +801,7 @@ async def cb_notes_main(call: types.CallbackQuery, state: FSMContext):
 @dp.callback_query_handler(text="note_list", state="*")
 async def cb_notes_list(call: types.CallbackQuery):
     user_id = call.from_user.id
-    notes = db.db_get_notes_list(user_id)
+    notes = await asyncio.to_thread(db.db_get_notes_list, user_id)
     
     kb = types.InlineKeyboardMarkup(row_width=1)
     text = ""
@@ -851,7 +851,7 @@ async def state_note_title(message: types.Message, state: FSMContext):
         return await message.reply("⚠️ <b>Judul terlalu panjang!</b>\nMaksimal 30 karakter. Silakan kirim ulang.")
     
     # Check if title exists
-    if db.db_get_note_content(message.from_user.id, title):
+    if await asyncio.to_thread(db.db_get_note_content, message.from_user.id, title):
          return await message.reply("⚠️ <b>Judul sudah ada!</b>\nSilakan gunakan judul lain.")
 
     await state.update_data(title=title)
@@ -869,7 +869,7 @@ async def state_note_content(message: types.Message, state: FSMContext):
         return await message.reply("⚠️ <b>Catatan Terlalu Panjang!</b>\nMaksimal 2000 karakter.")
     
     # SECURITY: Quota Limit
-    existing = db.db_get_notes_list(message.from_user.id)
+    existing = await asyncio.to_thread(db.db_get_notes_list, message.from_user.id)
     if len(existing) >= 50:
         await state.finish()
         return await message.reply("⚠️ <b>Kuota Penuh!</b>\nMaksimal 50 catatan per user. Silakan hapus catatan lama.")
@@ -877,7 +877,7 @@ async def state_note_content(message: types.Message, state: FSMContext):
     data = await state.get_data()
     title = data['title']
     
-    if db.db_save_note(message.from_user.id, title, content):
+    if await asyncio.to_thread(db.db_save_note, message.from_user.id, title, content):
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("📂 Lihat Daftar", callback_data="note_list"))
         await message.reply(
@@ -896,7 +896,7 @@ async def cb_notes_read(call: types.CallbackQuery):
     except IndexError:
         return await call.answer("Error data.")
 
-    content = db.db_get_note_content(call.from_user.id, title)
+    content = await asyncio.to_thread(db.db_get_note_content, call.from_user.id, title)
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -942,7 +942,7 @@ async def cb_notes_del_ask(call: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('note_del:'), state="*")
 async def cb_notes_del(call: types.CallbackQuery):
     title = call.data.split(':', 1)[1]
-    if db.db_delete_note(call.from_user.id, title):
+    if await asyncio.to_thread(db.db_delete_note, call.from_user.id, title):
         await call.answer("Catatan dihapus!")
         await cb_notes_list(call)
     else:
@@ -985,7 +985,7 @@ async def cmd_notes(message: types.Message):
         if not content:
              return await message.reply("⚠️ <b>Konten Kosong!</b>\nMasukkan isi catatan yang ingin disimpan.")
              
-        if db.db_save_note(user_id, title, content):
+        if await asyncio.to_thread(db.db_save_note, user_id, title, content):
             await message.reply(f"✅ Catatan <b>{title}</b> berhasil disimpan secara aman.")
         else:
             await message.reply("⚠️ <b>Gagal Menyimpan.</b>\nTerjadi kesalahan database atau judul sudah ada.")
@@ -993,7 +993,7 @@ async def cmd_notes(message: types.Message):
     # --- LIST NOTES ---
     elif action == "list":
         await message.answer_chat_action('typing')
-        notes = db.db_get_notes_list(user_id)
+        notes = await asyncio.to_thread(db.db_get_notes_list, user_id)
         if not notes:
             return await message.reply("📭 <b>Belum ada catatan.</b>\nBuat baru dengan <code>/note add</code>")
             
@@ -1016,7 +1016,7 @@ async def cmd_notes(message: types.Message):
         # Ambil SELURUH sisa teks sebagai judul (Support Multi-word)
         title = args[2].strip()
         
-        content = db.db_get_note_content(user_id, title)
+        content = await asyncio.to_thread(db.db_get_note_content, user_id, title)
         
         if content:
             await message.reply(
@@ -1038,7 +1038,7 @@ async def cmd_notes(message: types.Message):
         # Ambil SELURUH sisa teks sebagai judul
         title = args[2].strip()
         
-        if db.db_delete_note(user_id, title):
+        if await asyncio.to_thread(db.db_delete_note, user_id, title):
             await message.reply(f"🗑️ Catatan <b>{title}</b> berhasil dihapus.")
         else:
             await message.reply(f"⚠️ Gagal menghapus. Pastikan judul benar.")
@@ -3377,13 +3377,13 @@ async def save_fake_id_callback(callback_query: types.CallbackQuery):
     )
     
     # Save to DB
-    if db.db_save_note(user_id, title, content):
+    if await asyncio.to_thread(db.db_save_note, user_id, title, content):
         await callback_query.answer("✅ Identitas berhasil disimpan ke Catatan!", show_alert=True)
     else:
         # If duplicate title or other error
         # Try appending random digit if duplicate
         title_alt = f"{title} ({random.randint(1,99)})"
-        if db.db_save_note(user_id, title_alt, content):
+        if await asyncio.to_thread(db.db_save_note, user_id, title_alt, content):
              await callback_query.answer("✅ Tersimpan! (Judul disesuaikan)", show_alert=True)
         else:
              await callback_query.answer("⚠️ Gagal menyimpan. Cek kuota catatan Anda.", show_alert=True)
