@@ -1975,13 +1975,11 @@ async def process_dynamic_reply_button(message: types.Message, state: FSMContext
                 if btns_obj:
                     kb.row(*btns_obj)
         
-        # FIX: Send response and THEN re-send Reply Keyboard if needed
+        # Send response and ensure Reply Keyboard stays visible
         await message.reply(response, reply_markup=kb, parse_mode=types.ParseMode.HTML, disable_web_page_preview=True)
         
-        # Ensure Reply Keyboard stays visible
+        # Re-send Reply Keyboard just in case
         is_adm = await is_owner(message.from_user.id)
-        # We send it as a separate message or ensure the user has it. 
-        # Usually it persists, but if we want to be safe or if the previous menu was removed:
         # await message.answer("👇", reply_markup=get_reply_keyboard(is_adm)) 
         return
 
@@ -1989,14 +1987,17 @@ async def process_dynamic_reply_button(message: types.Message, state: FSMContext
     if action in BOT_STATE["disabled_features"]:
         return await message.reply("⚠️ <b>Fitur ini sedang dimatikan sementara oleh Admin.</b>")
 
+    is_adm = await is_owner(message.from_user.id)
+    reply_kb = get_reply_keyboard(is_adm)
+
     if action == 'admin':
         await admin_panel(message)
     elif action == 'chk':
-        await message.reply("<b>💳 CC Checker</b>\nSilakan kirim kartu dengan format: <code>cc|mm|yy|cvv</code>\nAtau gunakan perintah <code>/chk</code>.", reply_markup=get_reply_keyboard(await is_owner(message.from_user.id)))
+        await message.reply("<b>💳 CC Checker</b>\nSilakan kirim kartu dengan format: <code>cc|mm|yy|cvv</code>\nAtau gunakan perintah <code>/chk</code>.", reply_markup=reply_kb)
     elif action == 'gen':
-        await message.reply("<b>⚙️ VCC Generator</b>\nGunakan perintah <code>/gen BIN</code> (contoh: <code>/gen 454141</code>).", reply_markup=get_reply_keyboard(await is_owner(message.from_user.id)))
+        await message.reply("<b>⚙️ VCC Generator</b>\nGunakan perintah <code>/gen BIN</code> (contoh: <code>/gen 454141</code>).", reply_markup=reply_kb)
     elif action == 'bin':
-        await message.reply("<b>🔍 BIN Lookup</b>\nKirim perintah <code>/bin 454141</code> untuk cek.", reply_markup=get_reply_keyboard(await is_owner(message.from_user.id)))
+        await message.reply("<b>🔍 BIN Lookup</b>\nKirim perintah <code>/bin 454141</code> untuk cek.", reply_markup=reply_kb)
     elif action == 'mail':
         fake_msg = message
         fake_msg.text = "/mail"
@@ -2018,7 +2019,7 @@ async def process_dynamic_reply_button(message: types.Message, state: FSMContext
         fake_msg.text = "/info"
         await info(fake_msg)
     else:
-        await message.reply("⚠️ Aksi tidak dikenal.", reply_markup=get_reply_keyboard(await is_owner(message.from_user.id)))
+        await message.reply("⚠️ Aksi tidak dikenal.", reply_markup=reply_kb)
 
 
 @dp.message_handler(commands=['info', 'id'], commands_prefix=PREFIX)

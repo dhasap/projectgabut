@@ -98,10 +98,12 @@ class AsyncDatabaseAdapter:
     async def delete_note(self, user_id, title): return False
     async def save_mail_session(self, user_id, email, password, token): pass
     async def get_mail_session(self, user_id): return None
-    async def delete_mail_session(self, user_id): return False
     async def get_mail_sessions_list(self, user_id, limit=10): return []
+    async def delete_mail_session(self, user_id): return False
     async def get_pending_mail_sessions(self, limit=50): return []
     async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None): pass
+    async def touch_mail_session(self, user_id, mail_id): return False
+    async def update_mail_last_id(self, user_id, msg_id): pass
     
     # Metrics
     metrics = {'count': 0, 'latency_sum': 0, 'errors': 0}
@@ -202,13 +204,15 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
                 INDEX idx_user_note (user_id)
             )""",
             """CREATE TABLE IF NOT EXISTS temp_mail_sessions (
-                user_id BIGINT PRIMARY KEY,
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id BIGINT,
                 email VARCHAR(255),
                 password VARCHAR(255),
                 token VARCHAR(500),
                 last_msg_id VARCHAR(100),
                 next_check_at DATETIME,
                 created_at DATETIME,
+                INDEX idx_user_mail (user_id),
                 INDEX idx_next_check (next_check_at)
             )"""
         ]
@@ -216,12 +220,6 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
             async with conn.cursor() as cur:
                 for q in queries:
                     await cur.execute(q)
-                
-                # Manual Migration
-                try:
-                    await cur.execute("ALTER TABLE temp_mail_sessions ADD COLUMN next_check_at DATETIME DEFAULT NOW()")
-                    await cur.execute("CREATE INDEX idx_next_check ON temp_mail_sessions(next_check_at)")
-                except: pass
 
     async def _exec(self, query, args=None, fetch=False, fetch_one=False, dict_cursor=False):
         """Internal helper for metrics and execution."""
@@ -385,22 +383,22 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
             affected = await self._exec("DELETE FROM notes WHERE user_id = %s AND title = %s", (user_id, identifier))
         return affected and affected > 0
 
-    # --- MAIL SESSIONS (ADAPTIVE) ---
+    # --- MAIL SESSIONS (ADAPTIVE & HISTORY) ---
 
     async def save_mail_session(self, user_id, email, password, token):
+        # Insert as new history record
         sql = """INSERT INTO temp_mail_sessions (user_id, email, password, token, created_at, next_check_at) 
-                 VALUES (%s, %s, %s, %s, NOW(), NOW())
-                 ON DUPLICATE KEY UPDATE email=%s, password=%s, token=%s, created_at=NOW(), next_check_at=NOW()"""
-        await self._exec(sql, (user_id, email, password, token, email, password, token))
+                 VALUES (%s, %s, %s, %s, NOW(), NOW())"""
+        await self._exec(sql, (user_id, email, password, token))
         return True
 
     async def get_mail_session(self, user_id):
+        # Get latest active session (highest ID/created_at)
         return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = %s ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
 
-    async def touch_mail_session(self, user_id, mail_id):
-        # Bring to top (Active)
-        await self._exec("UPDATE temp_mail_sessions SET created_at = NOW() WHERE user_id = %s AND id = %s", (user_id, mail_id))
-        return True
+    async def get_mail_sessions_list(self, user_id, limit=20):
+        # List history
+        return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = %s ORDER BY created_at DESC LIMIT %s", (user_id, limit), fetch=True, dict_cursor=True) or []
 
     async def delete_mail_session(self, user_id, mail_id=None):
         if mail_id:
@@ -409,9 +407,10 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
             await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
         return True
 
-    async def get_mail_sessions_list(self, user_id, limit=10):
-        # Return list of dicts: email, token, etc.
-        return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = %s ORDER BY created_at DESC LIMIT %s", (user_id, limit), fetch=True, dict_cursor=True) or []
+    async def touch_mail_session(self, user_id, mail_id):
+        # Bring to top (Active) by updating created_at
+        await self._exec("UPDATE temp_mail_sessions SET created_at = NOW() WHERE user_id = %s AND id = %s", (user_id, mail_id))
+        return True
 
     async def get_pending_mail_sessions(self, limit=50):
         # Fetch sessions where next_check_at is in the past
@@ -467,7 +466,7 @@ async def init_db():
     if not adapter:
         adapter = AsyncDatabaseAdapter() # Dummy
 
-# --- WRAPPER FUNCTIONS (NOW NATIVE ASYNC) ---
+# --- WRAPPER FUNCTIONS (GLOBAL) ---
 async def db_save_user(user_id, username=None, first_name=None): return await adapter.save_user(user_id, username, first_name)
 async def db_get_users_batch(last_id=0, limit=100): return await adapter.get_users_batch(last_id, limit)
 async def db_get_users_count(): return await adapter.get_users_count()
@@ -485,13 +484,13 @@ async def db_get_activity_logs(limit=10): return await adapter.get_activity_logs
 async def db_set_config(key, value): return await adapter.set_config(key, value)
 async def db_save_note(user_id, title, content): return await adapter.save_note(user_id, title, content)
 async def db_get_notes_list(user_id): return await adapter.get_notes_list(user_id)
-async def db_get_note_content(user_id, title): return await adapter.get_note_content(user_id, title)
-async def db_delete_note(user_id, title): return await adapter.delete_note(user_id, title)
+async def db_get_note_content(user_id, identifier): return await adapter.get_note_content(user_id, identifier)
+async def db_delete_note(user_id, identifier): return await adapter.delete_note(user_id, identifier)
 async def db_save_mail_session(user_id, email, password, token): return await adapter.save_mail_session(user_id, email, password, token)
 async def db_get_mail_session(user_id): return await adapter.get_mail_session(user_id)
+async def db_get_mail_sessions_list(user_id, limit=20): return await adapter.get_mail_sessions_list(user_id, limit)
 async def db_delete_mail_session(user_id, mail_id=None): return await adapter.delete_mail_session(user_id, mail_id)
 async def db_touch_mail_session(user_id, mail_id): return await adapter.touch_mail_session(user_id, mail_id)
-async def db_get_mail_sessions_list(user_id, limit=20): return await adapter.get_mail_sessions_list(user_id, limit)
 async def db_get_pending_mail_sessions(limit=50): return await adapter.get_pending_mail_sessions(limit)
 async def db_update_mail_check_time(user_id, next_ts, last_msg_id=None): return await adapter.update_mail_check_time(user_id, next_ts, last_msg_id)
 async def db_update_mail_last_id(user_id, msg_id): return await adapter.update_mail_last_id(user_id, msg_id)
