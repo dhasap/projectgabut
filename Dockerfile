@@ -1,11 +1,25 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-WORKDIR /azkurabot
+# Set working directory
+WORKDIR /app
 
-RUN apt update && apt upgrade -y && apt install -y --no-install-recommends ca-certificates tzdata curl && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt /requirements.txt
+# Install system dependencies (needed for some python packages like cryptography/mysql)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libssl-dev \
+    libffi-dev \
+    python3-dev \
+    && rm -rf /var/lib/apt/lists/*
 
+# Copy requirements first to cache dependencies
+COPY requirements.txt .
+
+# Install dependencies
+RUN pip install --no-cache-dir -U pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the application
 COPY . .
 
-RUN pip3 install -U pip && pip3 install -U -r requirements.txt
+# Run the bot
 CMD ["python3", "bot.py"]
