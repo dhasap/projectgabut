@@ -296,92 +296,82 @@ def clean_html_msg(raw_html):
     clean = re.sub(r'<[^>]+>', '', raw_html)
     return clean.strip()
 
-def local_chk_gate(ccn, mm, yy, cvv):
+import aiohttp
+import asyncio
+
+async def local_chk_gate(ccn, mm, yy, cvv):
     """
     Main Checker Gate: Hybrid (Offline Filter -> Online Check).
-    Nama fungsi 'local_chk_gate' dipertahankan agar kompatibel dengan bot.py.
+    Async version using aiohttp for non-blocking I/O.
     """
     # 1. Validasi Dasar (Offline) dulu untuk hemat API call
-    # Kita gunakan offline_chk_gate untuk cek format, luhn, dan expiry.
-    # Jika gagal di sini, langsung return status 'die' tanpa panggil API.
     offline_res = offline_chk_gate(ccn, mm, yy, cvv)
     
     if offline_res['status'] != 'live':
-        # Tambahkan note bahwa ini hasil filter lokal
         offline_res['msg'] += " (Local Filter)"
         return offline_res
 
-    # 2. Jika lolos filter offline, lanjut ke Online Check (mock.payate.com)
+    # 2. Online Check (mock.payate.com)
     api_url = "https://mock.payate.com/api.php"
     card_data = f"{ccn}|{mm}|{yy}|{cvv}"
     
     try:
-        # Kirim request POST
-        payload = {'data': card_data}
-        # Gunakan requests library, set timeout pendek agar bot tidak hang
-        r = requests.post(api_url, data=payload, timeout=15)
-        
-        if r.status_code == 200:
-            try:
-                json_data = r.json()
-                raw_msg = json_data.get('msg', '')
-                clean_msg = clean_html_msg(raw_msg)
-                
-                # Parsing Status dari teks pesan
-                # API Payate biasanya return: "Status | CCN | ..."
-                # Kita cari keyword kunci
-                
-                status = "unknown"
-                code = 3 # Unknown
-                
-                lower_msg = clean_msg.lower()
-                
-                # Logika Status
-                if any(x in lower_msg for x in ["live", "approved", "charged", "success", "cvv matched"]):
-                    status = "live"
-                    code = 1
-                    # Perbaiki ikon jika perlu
-                    clean_msg = "✅ " + clean_msg
-                elif any(x in lower_msg for x in ["die", "declined", "insufficient", "do not honor", "error", "expired"]):
-                    status = "die"
-                    code = 2
-                    clean_msg = "❌ " + clean_msg
-                elif "unknown" in lower_msg:
-                    status = "unknown"
-                    code = 3
-                    clean_msg = "⚠️ " + clean_msg
-                
-                # Ambil bin info dari offline checker (lebih lengkap/rapi)
-                # karena API payate infonya kadang cuma 'Unknown' atau minim.
-                bin_info = offline_res['bin_info']
-                
-                return {
-                    "status": status,
-                    "msg": clean_msg,
-                    "bin_info": bin_info,
-                    "code": code
-                }
-                
-            except json.JSONDecodeError:
-                 return {
-                    "status": "unknown", 
-                    "msg": "⚠️ API Error: Invalid JSON response", 
-                    "bin_info": offline_res['bin_info'], 
-                    "code": 0
-                 }
-        else:
-            return {
-                "status": "unknown", 
-                "msg": f"⚠️ API Error: Status {r.status_code}", 
-                "bin_info": offline_res['bin_info'], 
-                "code": 0
-            }
+        timeout = aiohttp.ClientTimeout(total=10)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            payload = {'data': card_data}
+            async with session.post(api_url, data=payload) as r:
+                if r.status == 200:
+                    try:
+                        json_data = await r.json()
+                        raw_msg = json_data.get('msg', '')
+                        clean_msg = clean_html_msg(raw_msg)
+                        
+                        status = "unknown"
+                        code = 3 # Unknown
+                        
+                        lower_msg = clean_msg.lower()
+                        
+                        # Logika Status
+                        if any(x in lower_msg for x in ["live", "approved", "charged", "success", "cvv matched"]):
+                            status = "live"
+                            code = 1
+                            clean_msg = "✅ " + clean_msg
+                        elif any(x in lower_msg for x in ["die", "declined", "insufficient", "do not honor", "error", "expired"]):
+                            status = "die"
+                            code = 2
+                            clean_msg = "❌ " + clean_msg
+                        elif "unknown" in lower_msg:
+                            status = "unknown"
+                            code = 3
+                            clean_msg = "⚠️ " + clean_msg
+                        
+                        bin_info = offline_res['bin_info']
+                        
+                        return {
+                            "status": status,
+                            "msg": clean_msg,
+                            "bin_info": bin_info,
+                            "code": code
+                        }
+                    except ValueError:
+                         return {
+                            "status": "unknown", 
+                            "msg": "⚠️ API Error: Invalid JSON response", 
+                            "bin_info": offline_res['bin_info'], 
+                            "code": 0
+                         }
+                else:
+                    return {
+                        "status": "unknown", 
+                        "msg": f"⚠️ API Error: Status {r.status}", 
+                        "bin_info": offline_res['bin_info'], 
+                        "code": 0
+                    }
             
-    except requests.exceptions.RequestException as e:
-        # Jika koneksi error/timeout, fallback ke status 'unknown' tapi info valid (karena luhn pass)
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
         return {
             "status": "unknown",
-            "msg": f"⚠️ Connection Error: {str(e)}",
+            "msg": "⚠️ Connection Error/Timeout (Check API)",
             "bin_info": offline_res['bin_info'],
             "code": 0
         }

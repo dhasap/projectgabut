@@ -241,38 +241,38 @@ logging.basicConfig(level=logging.INFO)
 
 import database as db
 
-# DATABASE INTEGRATION (SUPABASE)
-def save_user(user: types.User):
-    """Simpan user_id dan username ke database via Supabase."""
-    db.db_save_user(user.id, user.username, user.first_name)
+# DATABASE INTEGRATION (SUPABASE/TiDB - ASYNC WRAPPERS)
+async def save_user(user: types.User):
+    """Simpan user_id dan username ke database secara Async."""
+    await asyncio.to_thread(db.db_save_user, user.id, user.username, user.first_name)
 
-def get_users_count():
-    return db.db_get_users_count()
+async def get_users_count():
+    return await asyncio.to_thread(db.db_get_users_count)
 
-def get_all_users():
-    return db.db_get_all_users()
+async def get_all_users():
+    return await asyncio.to_thread(db.db_get_all_users)
 
 # ADMIN MANAGEMENT
-def get_admins():
+async def get_admins():
     """Mengambil set ID admin (Owner + Supabase Admins)."""
-    return db.db_get_admins(OWNER)
+    return await asyncio.to_thread(db.db_get_admins, OWNER)
 
-def add_new_admin(user_id, username=None):
+async def add_new_admin(user_id, username=None):
     """Menambah admin baru ke database."""
-    current = get_admins()
+    current = await get_admins()
     if user_id in current: return False
-    return db.db_add_admin(user_id, username)
+    return await asyncio.to_thread(db.db_add_admin, user_id, username)
 
-def remove_admin(user_id):
+async def remove_admin(user_id):
     """Menghapus admin dari database."""
     if user_id == OWNER: return False
-    return db.db_remove_admin(user_id)
+    return await asyncio.to_thread(db.db_remove_admin, user_id)
 
-# GLOBAL STATE & SECURITY (BANNED, MAINTENANCE, FEATURES)
+# GLOBAL STATE & SECURITY
 # In-Memory State
 BOT_STATE = {
     "maintenance": False,
-    "disabled_features": [] # list of feature codes: 'chk', 'gen', 'bin', 'mail'
+    "disabled_features": [] 
 }
 
 # SPY MODE STATE
@@ -280,30 +280,30 @@ SPY_MODE = False
 SPY_ADMIN = None
 
 def load_bot_state():
-    """Load state dari Database."""
+    """Load state dari Database (Synchronous at Startup is OK)."""
     global BOT_STATE
     saved = db.db_load_state()
     if saved:
         BOT_STATE.update(saved)
 
-def save_bot_state():
-    """Save state ke Database."""
-    db.db_save_state(BOT_STATE)
+async def save_bot_state():
+    """Save state ke Database Async."""
+    await asyncio.to_thread(db.db_save_state, BOT_STATE)
 
 # Load initial state
 load_bot_state()
 
-def get_banned_users():
+async def get_banned_users():
     """Get set of banned user IDs."""
-    return db.db_get_banned()
+    return await asyncio.to_thread(db.db_get_banned)
 
-def ban_user(user_id):
-    current = get_banned_users()
+async def ban_user(user_id):
+    current = await get_banned_users()
     if str(user_id) in current: return False
-    return db.db_ban_user(user_id)
+    return await asyncio.to_thread(db.db_ban_user, user_id)
 
-def unban_user(user_id):
-    return db.db_unban_user(user_id)
+async def unban_user(user_id):
+    return await asyncio.to_thread(db.db_unban_user, user_id)
 
 
 # TEMP MAIL STORAGE
@@ -311,73 +311,26 @@ def unban_user(user_id):
 LAST_GEN_ID = {} # Last Generated Fake ID (for Save to Note feature)
 SAVED_MAILS = {} # History List: {user_id: [ {email, password, token}, ... ]}
 
-def save_email_session(user_id, email, password, token):
-    """Menyimpan sesi email ke history user."""
+async def save_email_session(user_id, email, password, token):
+    """Menyimpan sesi email ke history user dan DB secara Async."""
     if user_id not in SAVED_MAILS:
         SAVED_MAILS[user_id] = []
     
-    # Cek duplikasi, jika ada hapus yang lama agar yang baru naik ke atas
+    # Cek duplikasi di RAM
     SAVED_MAILS[user_id] = [x for x in SAVED_MAILS[user_id] if x['email'] != email]
     
     # Masukkan ke index 0 (paling baru)
     new_data = {"email": email, "password": password, "token": token}
     SAVED_MAILS[user_id].insert(0, new_data)
     
-    # Batasi maksimal 10 akun terakhir
     if len(SAVED_MAILS[user_id]) > 10:
         SAVED_MAILS[user_id].pop()
-
-# BOT INFO
-loop = asyncio.get_event_loop()
-
-# Default values allow the module to be imported without needing Telegram
-# credentials or network connectivity. Real bot metadata is populated at
-# runtime via ``initialize_bot_info`` before polling starts.
-BOT_USERNAME = os.getenv('BOT_USERNAME', 'unknown_bot')
-BOT_NAME = os.getenv('BOT_NAME', 'Bot')
-BOT_ID = int(os.getenv('BOT_ID', '0'))
-
-
-def initialize_bot_info():
-    """Safely populate bot metadata.
-
-    ``Bot.get_me`` requires a valid token and network access. In automated
-    environments (or when credentials are missing) we gracefully degrade to
-    the default placeholders above so imports do not crash.
-    """
-
-    global BOT_USERNAME, BOT_NAME, BOT_ID
-
-    try:
-        bot_info = loop.run_until_complete(bot.get_me())
-    except Exception as exc:  # pragma: no cover - defensive guard
-        logging.warning("Unable to fetch bot info: %s", exc)
-        return
-
-    BOT_USERNAME = bot_info.username or BOT_USERNAME
-    BOT_NAME = bot_info.first_name or BOT_NAME
-    BOT_ID = bot_info.id or BOT_ID
-
-# USE YOUR ROTATING PROXY API IN DICT FORMAT http://user:pass@providerhost:port
-proxies = {
-           'http': 'http://qnuomzzl-rotate:4i44gnayqk7c@p.webshare.io:80/',
-           'https': 'http://qnuomzzl-rotate:4i44gnayqk7c@p.webshare.io:80/'
-}
-
-session = requests.Session()
-
-# Random DATA
-letters = string.ascii_lowercase
-First = ''.join(random.choice(letters) for _ in range(6))
-Last = ''.join(random.choice(letters) for _ in range(6))
-PWD = ''.join(random.choice(letters) for _ in range(10))
-Name = f'{First}+{Last}'
-Email = f'{First}.{Last}@gmail.com'
-UA = 'Mozilla/5.0 (X11; Linux i686; rv:102.0) Gecko/20100101 Firefox/102.0'
-
+        
+    await asyncio.to_thread(db.db_save_mail_session, user_id, email, password, token) 
 
 async def is_owner(user_id):
-    return user_id in get_admins()
+    admins = await get_admins()
+    return user_id in admins
 
 
 
@@ -430,10 +383,10 @@ def get_admin_keyboard():
     markup.row("👥 Admins", "🔙 Exit Admin")
     return markup
 
-def log_admin_action(user, action, details):
-    """Helper untuk mencatat log."""
+async def log_admin_action(user, action, details):
+    """Helper untuk mencatat log secara Async."""
     try:
-        db.db_log_activity(user.id, user.username, action, details)
+        await asyncio.to_thread(db.db_log_activity, user.id, user.username, action, details)
     except: pass
 
 
@@ -649,8 +602,8 @@ Selamat datang di <b>{BOT_NAME}</b> — asistennya cek kartu & BIN yang cepat da
 
 @dp.message_handler(commands=['start', 'help'], commands_prefix=PREFIX)
 async def helpstr(message: types.Message):
-    # Log user
-    save_user(message.from_user)
+    # Log user Async
+    await save_user(message.from_user)
     
     # Handle deep linking arguments (e.g. /start bin)
     args = message.get_args()
@@ -764,9 +717,9 @@ async def helpstr(message: types.Message):
         await message.answer(start_msg, reply_markup=kb_start, disable_web_page_preview=True)
     
     # Send Reply Keyboard (Menu Bawah) - Persistent Menu
-    # Removed separate ⌨️ message to keep it aesthetic as requested.
-    # User can still access menu via the commands or previous keyboard if already present.
-    pass
+    # Memastikan menu bawah muncul kembali (penting jika user hapus chat history)
+    is_adm = await is_owner(message.from_user.id)
+    await message.answer("👇 <b>Menu Utama</b>", reply_markup=get_reply_keyboard(is_adm))
 
 
 # --- NOTES FEATURE (INLINE INTERFACE) ---
@@ -1083,7 +1036,7 @@ async def cmd_add_admin(message: types.Message):
         except:
             target_username = None
 
-    if add_new_admin(target_id, target_username):
+    if await add_new_admin(target_id, target_username):
         await message.reply(f"✅ User <code>{target_id}</code> (@{target_username or 'N/A'}) telah ditambahkan sebagai Admin.")
     else:
         await message.reply(f"⚠️ User <code>{target_id}</code> sudah menjadi admin.")
@@ -1101,14 +1054,14 @@ async def cmd_del_admin(message: types.Message):
         return await message.reply("⚠️ ID harus berupa angka.")
         
     target_id = int(args)
-    if remove_admin(target_id):
+    if await remove_admin(target_id):
         await message.reply(f"✅ User <code>{target_id}</code> dihapus dari Admin.")
     else:
         await message.reply(f"⚠️ Gagal menghapus. User <code>{target_id}</code> bukan admin tambahan atau tidak ditemukan.")
 
 @dp.message_handler(commands=['toggle'], commands_prefix=PREFIX)
 async def cmd_toggle(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins(): return
     
     args = message.get_args().lower()
     valid_codes = ['chk', 'gen', 'mail', 'bin', 'rnd', 'fake']
@@ -1123,42 +1076,43 @@ async def cmd_toggle(message: types.Message):
         BOT_STATE["disabled_features"].append(args)
         status = "🔴 OFF (Disabled)"
     
-    save_bot_state()
+    await save_bot_state()
     await message.reply(f"✅ Fitur <b>{args}</b> sekarang: {status}")
 
 @dp.message_handler(commands=['ban'], commands_prefix=PREFIX)
 async def cmd_ban(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins(): return
     target = message.get_args()
     if not target.isdigit(): return await message.reply("⚠️ Format: <code>/ban ID</code>")
     
-    if int(target) in get_admins():
+    if int(target) in await get_admins():
         return await message.reply("⚠️ Tidak bisa ban sesama Admin.")
         
-    if ban_user(target):
+    if await ban_user(target):
         await message.reply(f"⛔ User <code>{target}</code> telah diblokir.")
     else:
         await message.reply(f"⚠️ User <code>{target}</code> sudah dibanned.")
 
 @dp.message_handler(commands=['unban'], commands_prefix=PREFIX)
 async def cmd_unban(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins(): return
     target = message.get_args()
     if not target.isdigit(): return await message.reply("⚠️ Format: <code>/unban ID</code>")
     
-    if unban_user(target):
+    if await unban_user(target):
         await message.reply(f"✅ User <code>{target}</code> telah dibuka blokirnya.")
     else:
         await message.reply(f"⚠️ User <code>{target}</code> tidak ditemukan di daftar ban.")
 
 @dp.message_handler(commands=['user'], commands_prefix=PREFIX)
 async def cmd_check_user(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins(): return
     target = message.get_args()
     if not target.isdigit(): return await message.reply("⚠️ Format: <code>/user ID</code>")
     
-    is_adm = int(target) in get_admins()
-    is_ban = target in get_banned_users()
+    is_adm = int(target) in await get_admins()
+    banned_list = await get_banned_users()
+    is_ban = target in banned_list
     
     status = "👤 User Biasa"
     if is_adm: status = "👮 Admin"
@@ -1168,7 +1122,7 @@ async def cmd_check_user(message: types.Message):
 
 @dp.message_handler(commands=['dm'], commands_prefix=PREFIX)
 async def cmd_dm(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins(): return
     try:
         args = message.text.split(maxsplit=2)
         target = args[1]
@@ -1186,7 +1140,7 @@ async def cmd_dm(message: types.Message):
 async def cmd_spy(message: types.Message):
     global SPY_MODE, SPY_ADMIN
     
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins(): return
     
     args = message.get_args().lower()
     
@@ -1204,9 +1158,9 @@ async def cmd_spy(message: types.Message):
 
 @dp.message_handler(commands=['bc', 'broadcast'], commands_prefix=PREFIX)
 async def broadcast_msg(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins(): return
     
-    users = get_all_users()
+    users = await get_all_users()
     count = 0
     
     # Mode 1: Reply Broadcast (Forward/Copy)
@@ -1214,7 +1168,7 @@ async def broadcast_msg(message: types.Message):
         src = message.reply_to_message
         await message.reply(f"🚀 Memulai forward broadcast ke {len(users)} pengguna...")
         
-        log_admin_action(message.from_user, "BROADCAST_FWD", f"To {len(users)} users")
+        await log_admin_action(message.from_user, "BROADCAST_FWD", f"To {len(users)} users")
         
         for i, uid in enumerate(users):
             try:
@@ -1255,7 +1209,7 @@ async def broadcast_msg(message: types.Message):
                     kb.add(types.InlineKeyboardButton(label.strip(), url=url.strip()))
         
         await message.reply(f"🚀 Memulai text broadcast ke {len(users)} pengguna...")
-        log_admin_action(message.from_user, "BROADCAST_TXT", f"Msg: {msg_text[:20]}...")
+        await log_admin_action(message.from_user, "BROADCAST_TXT", f"Msg: {msg_text[:20]}...")
         
         for i, uid in enumerate(users):
             try:
@@ -1283,18 +1237,18 @@ async def background_broadcast(text):
 @dp.callback_query_handler(lambda c: c.data in ['maint_on', 'maint_off'])
 async def process_maint_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
-    if user_id not in get_admins():
+    if user_id not in await get_admins():
         return await bot.answer_callback_query(callback_query.id, "❌ Akses Ditolak", show_alert=True)
 
     mode = callback_query.data == 'maint_on'
     
     # Update State
     BOT_STATE["maintenance"] = mode
-    save_bot_state()
+    await save_bot_state()
     
     # Log
     action_str = "ON" if mode else "OFF"
-    log_admin_action(callback_query.from_user, "MAINTENANCE", f"Set to {action_str}")
+    await log_admin_action(callback_query.from_user, "MAINTENANCE", f"Set to {action_str}")
     
     # AUTO BROADCAST
     if mode:
@@ -1331,36 +1285,37 @@ async def process_maint_callback(callback_query: types.CallbackQuery):
 
 @dp.message_handler(commands=['setstart'], commands_prefix=PREFIX)
 async def cmd_set_start(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins(): return
     # Ambil full text setelah command (raw) untuk mempertahankan format baris
     text = message.text.split(maxsplit=1)
     if len(text) < 2: return await message.reply(f"⚠️ Gunakan: <code>{PREFIX}setstart [pesan baru]</code>")
     
     content = text[1]
     db.db_set_config("start_text", content)
-    log_admin_action(message.from_user, "SET_START", "Updated start message")
+    await log_admin_action(message.from_user, "SET_START", "Updated start message")
     await message.reply("✅ Pesan Start berhasil diubah!")
 
 @dp.message_handler(commands=['sethelp'], commands_prefix=PREFIX)
 async def cmd_set_help(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins(): return
     text = message.text.split(maxsplit=1)
     if len(text) < 2: return await message.reply(f"⚠️ Gunakan: <code>{PREFIX}sethelp [pesan baru]</code>")
     
     content = text[1]
     db.db_set_config("help_text", content)
-    log_admin_action(message.from_user, "SET_HELP", "Updated help message")
+    await log_admin_action(message.from_user, "SET_HELP", "Updated help message")
     await message.reply("✅ Pesan Help berhasil diubah!")
 
 @dp.message_handler(lambda message: message.text in ["📊 Stats", "📢 Broadcast", "⛔ User Control", "🎛️ Features", "👁️ Spy Mode", "🚧 Maint. Mode", "🏥 System Health", "👥 Admins", "🔙 Exit Admin", "✏️ Edit Texts", "📜 Admin Logs", "🎹 Menu Editor"])
 async def process_admin_keyboard(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins(): return
     
     text = message.text
     
     if text == "📊 Stats":
-        u_count = get_users_count()
-        b_count = len(get_banned_users())
+        u_count = await get_users_count()
+        banned_list = await get_banned_users()
+        b_count = len(banned_list)
         # mail_sessions = len(USER_MAILS) # Deprecated
         
         # System Info
@@ -1478,7 +1433,7 @@ async def process_admin_keyboard(message: types.Message):
         await message.reply(msg)
 
     elif text == "👥 Admins":
-        admins = get_admins()
+        admins = await get_admins()
         admin_list = "\n".join([f"• <code>{aid}</code> {'(Owner)' if aid == OWNER else ''}" for aid in admins])
         
         await message.reply(
@@ -1540,7 +1495,7 @@ async def process_admin_keyboard(message: types.Message):
         await message.reply(guide_msg, reply_markup=kb)
 
     elif text == "📜 Admin Logs":
-        logs = db.db_get_activity_logs(limit=15)
+        logs = await asyncio.to_thread(db.db_get_activity_logs, limit=15)
         if not logs:
             return await message.reply("📭 <b>Log Kosong</b>\nBelum ada aktivitas admin tercatat.")
             
@@ -2341,7 +2296,7 @@ async def ch(message: types.Message):
     await message.answer_chat_action('typing')
     tic = time.perf_counter()
     keyboard_markup = menu_keyboard()
-    s = requests.Session()
+    # Removed unused requests.Session
     
     try:
         await dp.throttle('chk', rate=ANTISPAM)
@@ -2389,12 +2344,13 @@ async def ch(message: types.Message):
         die_results = []
         unknown_results = []
         
-        last_edit_time = 0
-        total_cards = len(card_lines)
+        valid_cards_to_check = []
 
-        for idx, card_line in enumerate(card_lines, start=1):
+        # 1. PARSE & VALIDATE FORMAT FIRST
+        for card_line in card_lines:
             try:
                 x = re.findall(r'\d+', card_line)
+                if len(x) < 4: raise ValueError
                 ccn = x[0]
                 mm = x[1]
                 yy = x[2]
@@ -2412,7 +2368,7 @@ async def ch(message: types.Message):
             mm = mm.zfill(2)[:2]
             yy = yy[-2:]
             
-            # Relaxed validation: 12-19 digits allowed (Maestro, UnionPay, etc.)
+            # Relaxed validation
             if len(ccn) < 12 or len(ccn) > 19 or not is_card_valid(ccn):
                 unknown_results.append(
                     f"<code>{ccn}|{mm}|{yy}|{cvv}</code>\n⚠️ <b>Result:</b> Invalid Card/Luhn"
@@ -2424,25 +2380,38 @@ async def ch(message: types.Message):
                     f"<code>{ccn}|{mm}|{yy}|{cvv}</code>\n⚠️ <b>Result:</b> Blacklisted BIN"
                 )
                 continue
-                
-            # --- CALL LOCAL CHECKER (NON-BLOCKING) ---
-            res = await asyncio.to_thread(local_chk_gate, ccn, mm, yy, cvv)
+            
+            # Store valid card data for processing
+            valid_cards_to_check.append((ccn, mm, yy, cvv))
+
+        # 2. PROCESS VALID CARDS IN PARALLEL (Async)
+        last_edit_time = 0
+        total_cards = len(card_lines)
+        checked_count = len(unknown_results) # Start with already failed ones
+        
+        sem = asyncio.Semaphore(5) # Limit to 5 concurrent requests
+
+        async def check_wrapper(c_data):
+            async with sem:
+                # Call the async version directly
+                return await local_chk_gate(*c_data), c_data
+
+        tasks = [check_wrapper(c) for c in valid_cards_to_check]
+        
+        for future in asyncio.as_completed(tasks):
+            res, c_data = await future
+            checked_count += 1
+            
+            ccn, mm, yy, cvv = c_data
             
             # Parse Response
             bin_info = res.get("bin_info", "Unknown")
             msg_text = res.get("msg", "No message")
             status = res.get("status", "unknown")
             
-            # Clean up response message (remove unwanted credits)
             clean_res = msg_text.replace("Checked - Shinji", "").replace("unknown", "").strip()
             if clean_res.startswith("✅ ") or clean_res.startswith("❌ ") or clean_res.startswith("⚠️ "):
-                 clean_res = clean_res[2:].strip() # Remove icon prefix to avoid double icon
-
-            # Detect Balance/Saldo
-            balance_info = ""
-            if "balance" in clean_res.lower() or "insufficient funds" in clean_res.lower() or "$" in clean_res:
-                 # If balance is explicitly mentioned
-                 pass
+                 clean_res = clean_res[2:].strip()
 
             # Icon Status
             if status == "live":
@@ -2452,7 +2421,6 @@ async def ch(message: types.Message):
             else:
                 stat_icon = "⚠️ <b>UNKNOWN / ERROR</b>"
 
-            # Format Output Modern & SEO Friendly
             result_line = (
                 f"<b>↯ 🌩️ AZKURA GATE 🌩️</b>\n"
                 f"{stat_icon}\n"
@@ -2469,9 +2437,9 @@ async def ch(message: types.Message):
             else:
                 unknown_results.append(result_line)
 
-            # Update message logic (Throttle: every 3 seconds or last item)
+            # Update message logic (Throttle: every 2 seconds or completion)
             current_time = time.time()
-            if current_time - last_edit_time > 3 or idx == total_cards:
+            if current_time - last_edit_time > 2 or checked_count == total_cards:
                 sections = []
                 if live_results:
                     sections.append("<b>✅ Live Cards</b>\n" + "\n\n".join(live_results))
@@ -2483,7 +2451,7 @@ async def ch(message: types.Message):
                 body = "\n\n━━━━━━━━━━━━━━━━━━\n\n".join(sections) if sections else "<b>Processing...</b>"
                 
                 toc = time.perf_counter()
-                footer = f"\n\n━━━━━━━━━━━━━━━━━━\n<b>Checked: {idx}/{total_cards}</b> - <b>Took: {toc - tic:0.2f}s</b>"
+                footer = f"\n\n━━━━━━━━━━━━━━━━━━\n<b>Checked: {checked_count}/{total_cards}</b> - <b>Took: {toc - tic:0.2f}s</b>"
                 
                 try:
                     await loading_msg.edit_text(
@@ -2493,7 +2461,7 @@ async def ch(message: types.Message):
                     )
                     last_edit_time = current_time
                 except Exception:
-                    pass  # Ignore edit errors (flood control)
+                    pass
 
 
 def luhn_verification(base):
@@ -3231,7 +3199,7 @@ async def switch_mail_callback(callback_query: types.CallbackQuery):
     selected_account = saved[idx]
     
     # Set as Active
-    db.db_save_mail_session(user_id, selected_account['email'], selected_account['password'], selected_account['token'])
+    await asyncio.to_thread(db.db_save_mail_session, user_id, selected_account['email'], selected_account['password'], selected_account['token'])
     
     email = selected_account['email']
     
