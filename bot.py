@@ -328,6 +328,55 @@ async def save_email_session(user_id, email, password, token):
         
     await asyncio.to_thread(db.db_save_mail_session, user_id, email, password, token) 
 
+# BOT INFO
+loop = asyncio.get_event_loop()
+
+# Default values allow the module to be imported without needing Telegram
+# credentials or network connectivity. Real bot metadata is populated at
+# runtime via ``initialize_bot_info`` before polling starts.
+BOT_USERNAME = os.getenv('BOT_USERNAME', 'unknown_bot')
+BOT_NAME = os.getenv('BOT_NAME', 'Bot')
+BOT_ID = int(os.getenv('BOT_ID', '0'))
+
+
+def initialize_bot_info():
+    """Safely populate bot metadata.
+
+    ``Bot.get_me`` requires a valid token and network access. In automated
+    environments (or when credentials are missing) we gracefully degrade to
+    the default placeholders above so imports do not crash.
+    """
+
+    global BOT_USERNAME, BOT_NAME, BOT_ID
+
+    try:
+        bot_info = loop.run_until_complete(bot.get_me())
+    except Exception as exc:  # pragma: no cover - defensive guard
+        logging.warning("Unable to fetch bot info: %s", exc)
+        return
+
+    BOT_USERNAME = bot_info.username or BOT_USERNAME
+    BOT_NAME = bot_info.first_name or BOT_NAME
+    BOT_ID = bot_info.id or BOT_ID
+
+# USE YOUR ROTATING PROXY API IN DICT FORMAT http://user:pass@providerhost:port
+proxies = {
+           'http': 'http://qnuomzzl-rotate:4i44gnayqk7c@p.webshare.io:80/',
+           'https': 'http://qnuomzzl-rotate:4i44gnayqk7c@p.webshare.io:80/'
+}
+
+session = requests.Session()
+
+# Random DATA
+letters = string.ascii_lowercase
+First = ''.join(random.choice(letters) for _ in range(6))
+Last = ''.join(random.choice(letters) for _ in range(6))
+PWD = ''.join(random.choice(letters) for _ in range(10))
+Name = f'{First}+{Last}'
+Email = f'{First}.{Last}@gmail.com'
+UA = 'Mozilla/5.0 (X11; Linux i686; rv:102.0) Gecko/20100101 Firefox/102.0'
+
+
 async def is_owner(user_id):
     admins = await get_admins()
     return user_id in admins
