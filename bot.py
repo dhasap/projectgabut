@@ -430,7 +430,7 @@ def get_admin_keyboard():
     markup.row("🎹 Menu Editor", "✏️ Edit Texts") # Added Menu Editor
     markup.row("👁️ Spy Mode", "🚧 Maint. Mode")
     markup.row("📜 Admin Logs", "🏥 System Health")
-    markup.row("👥 Admins", "🔙 Exit Admin")
+    markup.row("👥 Admins", "🚪 Exit Admin")
     return markup
 
 async def log_admin_action(user, action, details):
@@ -569,34 +569,9 @@ Contoh:
 '''
         )
     elif code == 'm_mail':
-        kb = types.InlineKeyboardMarkup(row_width=2)
-        kb.row(
-            types.InlineKeyboardButton("🎲 Random", callback_data="m_mail_create"),
-            types.InlineKeyboardButton("✍️ Custom", callback_data="m_mail_custom")
-        )
-        kb.row(
-            types.InlineKeyboardButton("🔑 Login", callback_data="m_mail_login"),
-            types.InlineKeyboardButton("📋 List Akun", callback_data="m_mail_list")
-        )
-        
-        await bot.send_message(
-            user.id,
-            f"<b>📧 MENU TEMP MAIL</b>\nPilih metode pembuatan email:",
-            reply_markup=kb
-        )
+        await show_mail_menu(user.id)
     elif code == 'm_fake':
-        await bot.send_message(
-            user.id,
-            f'''
-<b>👤 Fake Identity</b>
-Buat identitas palsu lengkap dengan email aktif.
-Gunakan: <code>{PREFIX}fake [negara]</code>
-Contoh:
-• <code>{PREFIX}fake id</code> (Indonesia)
-• <code>{PREFIX}fake us</code> (Amerika)
-• <code>{PREFIX}fake kr</code> (Korea)
-'''
-        )
+        await show_fake_menu(user.id, message=callback_query.message)
     elif code == 'm_iban':
         kb = types.InlineKeyboardMarkup(row_width=3)
         # Ambil negara dari scraper
@@ -646,7 +621,7 @@ Contoh:
     elif code == 'm_main':
         # Fix: Reply Keyboard must be sent via send_message, not edit_message
         try:
-            await bot.edit_message_text("👇 <b>Menu Utama</b> telah dibuka di bawah.", chat_id=user.id, message_id=callback_query.message.message_id, parse_mode=types.ParseMode.HTML)
+            await bot.edit_message_text("✅ <b>Menu utama</b> siap digunakan di keyboard bawah.", chat_id=user.id, message_id=callback_query.message.message_id, parse_mode=types.ParseMode.HTML)
         except: pass
         
         is_adm = await is_owner(user.id)
@@ -655,7 +630,7 @@ Contoh:
         
         # FIX: Send Reply Keyboard separately to ensure it appears
         is_adm = await is_owner(user.id)
-        await bot.send_message(user.id, "👇 <b>Menu Utama</b>", reply_markup=get_reply_keyboard(is_adm))
+        await bot.send_message(user.id, "Silakan pilih menu di keyboard bawah.", reply_markup=get_reply_keyboard(is_adm))
 
 
 @dp.message_handler(commands=['start', 'help'], commands_prefix=PREFIX, state="*")
@@ -778,7 +753,7 @@ async def helpstr(message: types.Message, state: FSMContext):
     # Send Reply Keyboard (Menu Bawah) - Persistent Menu
     # Memastikan menu bawah muncul kembali (penting jika user hapus chat history)
     is_adm = await is_owner(message.from_user.id)
-    await message.answer("👇 <b>Menu Utama</b>", reply_markup=get_reply_keyboard(is_adm))
+    await message.answer("Silakan pilih menu di keyboard bawah.", reply_markup=get_reply_keyboard(is_adm))
 
 
 # --- NOTES FEATURE (INLINE INTERFACE) ---
@@ -1393,7 +1368,7 @@ async def cmd_set_help(message: types.Message):
     await log_admin_action(message.from_user, "SET_HELP", "Updated help message")
     await message.reply("✅ Pesan Help berhasil diubah!")
 
-@dp.message_handler(lambda message: message.text in ["📊 Stats", "📢 Broadcast", "⛔ User Control", "🎛️ Features", "👁️ Spy Mode", "🚧 Maint. Mode", "🏥 System Health", "👥 Admins", "🔙 Exit Admin", "✏️ Edit Texts", "📜 Admin Logs", "🎹 Menu Editor"])
+@dp.message_handler(lambda message: message.text in ["📊 Stats", "📢 Broadcast", "⛔ User Control", "🎛️ Features", "👁️ Spy Mode", "🚧 Maint. Mode", "🏥 System Health", "👥 Admins", "🚪 Exit Admin", "✏️ Edit Texts", "📜 Admin Logs", "🎹 Menu Editor"])
 async def process_admin_keyboard(message: types.Message):
     if message.from_user.id not in await get_admins(): return
     
@@ -1610,7 +1585,7 @@ async def process_admin_keyboard(message: types.Message):
             "<b>📜 LAST 15 ADMIN LOGS</b>\n━━━━━━━━━━━━━━━━━━\n" + "\n\n".join(log_lines)
         )
         
-    elif text == "🔙 Exit Admin":
+    elif text == "🚪 Exit Admin":
         await message.reply("Kembali ke menu utama.", reply_markup=get_reply_keyboard(is_admin=True))
 
 # --- MENU EDITOR HANDLERS ---
@@ -1622,7 +1597,8 @@ async def back_to_admin_handler(message: types.Message, state: FSMContext):
 
 @dp.message_handler(lambda m: m.text == "Reply Editor", state="*")
 async def reply_editor_menu(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins():
+        return
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -1786,7 +1762,8 @@ async def reply_del_action(call: types.CallbackQuery):
 
 @dp.message_handler(lambda m: m.text == "Inline Editor", state="*")
 async def inline_editor_menu(message: types.Message):
-    if message.from_user.id not in get_admins(): return
+    if message.from_user.id not in await get_admins():
+        return
     
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
@@ -1994,14 +1971,22 @@ async def process_dynamic_reply_button(message: types.Message, state: FSMContext
         await admin_panel(message)
     elif action == 'chk':
         await message.reply("<b>💳 CC Checker</b>\nSilakan kirim kartu dengan format: <code>cc|mm|yy|cvv</code>\nAtau gunakan perintah <code>/chk</code>.", reply_markup=reply_kb)
+    elif action == 'rnd':
+        fake_msg = message
+        fake_msg.text = "/rnd"
+        await rnd_bin(fake_msg)
     elif action == 'gen':
         await message.reply("<b>⚙️ VCC Generator</b>\nGunakan perintah <code>/gen BIN</code> (contoh: <code>/gen 454141</code>).", reply_markup=reply_kb)
     elif action == 'bin':
         await message.reply("<b>🔍 BIN Lookup</b>\nKirim perintah <code>/bin 454141</code> untuk cek.", reply_markup=reply_kb)
     elif action == 'mail':
+        await show_mail_menu(message.from_user.id, message=message)
+    elif action == 'mail_inbox':
+        await show_mail_inbox(message.from_user.id, message=message)
+    elif action == 'mail_list':
         fake_msg = message
-        fake_msg.text = "/mail"
-        await gen_mail(fake_msg)
+        fake_msg.text = "/emails"
+        await list_emails(fake_msg)
     elif action == 'note':
         fake_msg = message
         fake_msg.text = "/note"
@@ -2018,6 +2003,10 @@ async def process_dynamic_reply_button(message: types.Message, state: FSMContext
         fake_msg = message
         fake_msg.text = "/info"
         await info(fake_msg)
+    elif action == 'help':
+        fake_msg = message
+        fake_msg.text = "/help"
+        await helpstr(fake_msg, state)
     else:
         await message.reply("⚠️ Aksi tidak dikenal.", reply_markup=reply_kb)
 
@@ -2741,12 +2730,131 @@ async def get_mail_messages(token):
         pass
     return None
 
+async def show_mail_menu(user_id, message: types.Message = None):
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(
+        types.InlineKeyboardButton("🎲 Buat Random", callback_data="m_mail_create"),
+        types.InlineKeyboardButton("✍️ Custom", callback_data="m_mail_custom")
+    )
+    kb.row(
+        types.InlineKeyboardButton("🔑 Login", callback_data="m_mail_login"),
+        types.InlineKeyboardButton("📋 List Akun", callback_data="m_mail_list")
+    )
+    kb.row(
+        types.InlineKeyboardButton("📥 Cek Inbox", callback_data="refresh_mail")
+    )
+
+    text = (
+        "<b>📧 MENU TEMP MAIL</b>\n"
+        "Pilih metode yang Anda butuhkan di bawah ini."
+    )
+
+    if message:
+        await message.reply(text, reply_markup=kb)
+    else:
+        await bot.send_message(user_id, text, reply_markup=kb)
+
+async def show_mail_inbox(user_id, message: types.Message = None, edit_message=False):
+    session = await db.db_get_mail_session(user_id)
+    if not session:
+        text = (
+            "⚠️ <b>Belum ada sesi email aktif.</b>\n"
+            "Silakan buat atau login ke akun terlebih dahulu."
+        )
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        kb.add(types.InlineKeyboardButton("📧 Menu Temp Mail", callback_data="m_mail"))
+        if message:
+            return await message.reply(text, reply_markup=kb)
+        return await bot.send_message(user_id, text, reply_markup=kb)
+
+    emails = await get_mail_messages(session['token'])
+    emails = emails or []
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    if not emails:
+        text = (
+            "<b>📥 INBOX KOSONG</b>\n"
+            "Belum ada email masuk.\n"
+            "Klik refresh untuk cek lagi."
+        )
+    else:
+        text = (
+            f"<b>📥 INBOX ANDA</b> ({len(emails)} pesan)\n"
+            "Pilih pesan untuk dibuka:"
+        )
+        for msg in emails[:10]:
+            msg_id = msg.get('id')
+            subject = msg.get('subject') or "No Subject"
+            sender = msg.get('from', {}).get('address', 'Unknown')
+            label = f"📨 {subject} • {sender}"
+            kb.add(types.InlineKeyboardButton(label[:60], callback_data=f"read_{msg_id}"))
+
+    kb.row(
+        types.InlineKeyboardButton("🔄 Refresh", callback_data="refresh_mail"),
+        types.InlineKeyboardButton("🔄 Ganti Akun", callback_data="m_mail_list")
+    )
+    kb.add(types.InlineKeyboardButton("🔙 Menu Temp Mail", callback_data="m_mail"))
+
+    if message and edit_message:
+        try:
+            return await message.edit_text(text, reply_markup=kb)
+        except:
+            return await message.reply(text, reply_markup=kb)
+    if message:
+        return await message.reply(text, reply_markup=kb)
+    return await bot.send_message(user_id, text, reply_markup=kb)
+
+async def show_fake_menu(user_id, message: types.Message = None):
+    countries = [
+        ("id", "🇮🇩 Indonesia"),
+        ("us", "🇺🇸 USA"),
+        ("jp", "🇯🇵 Japan"),
+        ("kr", "🇰🇷 Korea"),
+        ("sg", "🇸🇬 Singapore"),
+        ("my", "🇲🇾 Malaysia"),
+        ("ph", "🇵🇭 Philippines"),
+        ("th", "🇹🇭 Thailand"),
+        ("vn", "🇻🇳 Vietnam"),
+        ("in", "🇮🇳 India"),
+        ("cn", "🇨🇳 China"),
+        ("de", "🇩🇪 Germany"),
+        ("fr", "🇫🇷 France"),
+        ("it", "🇮🇹 Italy"),
+        ("es", "🇪🇸 Spain"),
+        ("ru", "🇷🇺 Russia"),
+        ("gb", "🇬🇧 UK"),
+        ("tr", "🇹🇷 Turkey"),
+        ("nl", "🇳🇱 Netherlands"),
+        ("pl", "🇵🇱 Poland"),
+    ]
+
+    kb = types.InlineKeyboardMarkup(row_width=3)
+    buttons = [types.InlineKeyboardButton(label, callback_data=f"fake_{code}") for code, label in countries]
+    for i in range(0, len(buttons), 3):
+        kb.row(*buttons[i:i + 3])
+    kb.add(types.InlineKeyboardButton("🔙 Menu Utama", callback_data="m_main"))
+
+    text = (
+        "<b>👤 PILIH NEGARA FAKE ID</b>\n"
+        "Silakan pilih negara yang ingin dibuat."
+    )
+
+    if message:
+        await message.reply(text, reply_markup=kb)
+    else:
+        await bot.send_message(user_id, text, reply_markup=kb)
+
 @dp.message_handler(commands=['mail'], commands_prefix=PREFIX)
 async def gen_mail(message: types.Message):
+    await show_mail_menu(message.from_user.id, message=message)
+    return
+
+async def create_random_mail(message: types.Message):
     # SECURITY: Cooldown 30 Seconds
     user_id = message.from_user.id
     last_gen = USER_MAIL_COOLDOWN.get(user_id, 0)
-    if time.time() - last_gen < 30 and user_id not in get_admins():
+    admins = await get_admins()
+    if time.time() - last_gen < 30 and user_id not in admins:
         return await message.reply("⏳ <b>Cooldown!</b>\nMohon tunggu 30 detik sebelum membuat email baru lagi.")
 
     await message.answer_chat_action('typing')
@@ -2871,7 +2979,7 @@ async def create_mail_callback(callback_query: types.CallbackQuery):
     fake_msg = callback_query.message
     fake_msg.from_user = callback_query.from_user
     fake_msg.text = "/mail" # Reset args
-    await gen_mail(fake_msg)
+    await create_random_mail(fake_msg)
 
 @dp.callback_query_handler(lambda c: c.data == 'm_mail_custom', state="*")
 async def custom_mail_callback(callback_query: types.CallbackQuery, state: FSMContext):
@@ -2931,7 +3039,8 @@ async def execute_custom_mail(message: types.Message, state: FSMContext, passwor
     # SECURITY: Cooldown
     user_id = message.chat.id
     last_gen = USER_MAIL_COOLDOWN.get(user_id, 0)
-    if time.time() - last_gen < 30 and user_id not in get_admins():
+    admins = await get_admins()
+    if time.time() - last_gen < 30 and user_id not in admins:
         await state.finish()
         return await message.reply("⏳ <b>Cooldown!</b>\nTunggu 30 detik sebelum membuat email baru.")
 
@@ -3058,30 +3167,16 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     
     # List Buttons
     for i, data in enumerate(current_page_items):
-        actual_idx = start_idx + i
         email = data['email']
         is_active = "✅ " if email == current_email else ""
-        
+
         if mode == "del":
             btn_text = f"🗑 Hapus: {email}"
-            # We need to pass ID for deletion now, or email. ID is better.
-            # But callback data limit.
-            # Let's try to use index from the list (RAM dependent) or just use ID if we have it.
-            # The new schema has `id`.
-            mail_id = data.get('id')
-            if mail_id:
-                cb_data = f"dm_mail_id_{mail_id}_{page}"
-            else:
-                # Fallback to index if ID not available (should be there)
-                cb_data = f"dm_mail_{actual_idx}_{page}"
+            cb_data = f"dm_mail_{page}_{i}"
         else:
             btn_text = f"{is_active}{email}"
-            mail_id = data.get('id')
-            if mail_id:
-                cb_data = f"sw_mail_id_{mail_id}_{page}"
-            else:
-                cb_data = f"sw_mail_{actual_idx}_{page}"
-            
+            cb_data = f"sw_mail_{page}_{i}"
+
         kb.add(types.InlineKeyboardButton(btn_text, callback_data=cb_data))
     
     # Navigation Buttons
@@ -3120,23 +3215,27 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
 async def delete_saved_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     parts = callback_query.data.split('_')
-    # Format: dm_mail_id_{id}_{page}
-    
-    mail_id = None
-    page = 0
-    
-    if 'id' in parts:
-        try:
-            mail_id = int(parts[3])
-            page = int(parts[4])
-        except: pass
-    else:
-        return await callback_query.answer("Mode lama tidak didukung.", show_alert=True)
-        
-    if not mail_id:
-        return await callback_query.answer("Error ID.")
-        
-    if await db.db_delete_mail_session(user_id, mail_id):
+    # Format: dm_mail_{page}_{index}
+    if len(parts) < 4:
+        return await callback_query.answer("Data tidak valid.", show_alert=True)
+
+    try:
+        page = int(parts[2])
+        idx = int(parts[3])
+    except ValueError:
+        return await callback_query.answer("Data tidak valid.", show_alert=True)
+
+    saved = await db.db_get_mail_sessions_list(user_id, limit=20)
+    if not saved:
+        return await callback_query.answer("Akun tidak ditemukan.", show_alert=True)
+
+    max_per_page = 5
+    actual_idx = page * max_per_page + idx
+    if actual_idx < 0 or actual_idx >= len(saved):
+        return await callback_query.answer("Akun tidak ditemukan.", show_alert=True)
+
+    email = saved[actual_idx]["email"]
+    if await db.db_delete_mail_session(user_id, email):
         await callback_query.answer("🗑 Akun dihapus.")
         # Refresh list
         callback_query.data = f"m_mail_list:{page}:del"
@@ -3147,24 +3246,8 @@ async def delete_saved_mail_callback(callback_query: types.CallbackQuery):
 
 @dp.message_handler(commands=['emails', 'listmail'], commands_prefix=PREFIX)
 async def list_emails(message: types.Message):
-    # Wrapper to call the callback logic with a dummy callback query
-    # Need to simulate sending the initial message first
     user_id = message.from_user.id
-    saved = SAVED_MAILS.get(user_id, [])
-    
-    # AUTO-RESTORE LOGIC
-    if not saved:
-        db_sess = await db.db_get_mail_session(user_id)
-        if db_sess:
-             # Reconstruct session object matching SAVED_MAILS format
-             restored = {
-                 "email": db_sess['email'],
-                 "password": db_sess['password'],
-                 "token": db_sess['token']
-             }
-             SAVED_MAILS[user_id] = [restored]
-             saved = SAVED_MAILS[user_id]
-    
+    saved = await db.db_get_mail_sessions_list(user_id, limit=20)
     if not saved:
         return await message.reply("⚠️ <b>Belum ada riwayat email.</b>")
 
@@ -3187,7 +3270,7 @@ async def list_emails(message: types.Message):
     for i, data in enumerate(current_page_items):
         email = data['email']
         is_active = "✅ " if email == current_email else ""
-        kb.add(types.InlineKeyboardButton(f"{is_active}{email}", callback_data=f"sw_mail_{i}_{page}"))
+        kb.add(types.InlineKeyboardButton(f"{is_active}{email}", callback_data=f"sw_mail_{page}_{i}"))
         
     nav_buttons = []
     nav_buttons.append(types.InlineKeyboardButton(f"📄 1/{total_pages}", callback_data="ignore"))
@@ -3206,26 +3289,30 @@ async def list_emails(message: types.Message):
 async def switch_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     
-    # Format: sw_mail_id_{id}_{page} OR sw_mail_{index}_{page}
+    # Format: sw_mail_{page}_{index}
     parts = callback_query.data.split('_')
     
-    mail_id = None
-    page = 0
-    
-    if 'id' in parts:
-        try:
-            mail_id = int(parts[3])
-            page = int(parts[4])
-        except: pass
-    else:
-        # Legacy/RAM index support (best effort)
-        return await callback_query.answer("Mode lama tidak didukung. Silakan refresh list.", show_alert=True)
+    if len(parts) < 4:
+        return await callback_query.answer("Data tidak valid.", show_alert=True)
 
-    if not mail_id:
-        return await callback_query.answer("ID Akun tidak valid.")
+    try:
+        page = int(parts[2])
+        idx = int(parts[3])
+    except ValueError:
+        return await callback_query.answer("Data tidak valid.", show_alert=True)
 
+    saved = await db.db_get_mail_sessions_list(user_id, limit=20)
+    if not saved:
+        return await callback_query.answer("Akun tidak ditemukan.", show_alert=True)
+
+    max_per_page = 5
+    actual_idx = page * max_per_page + idx
+    if actual_idx < 0 or actual_idx >= len(saved):
+        return await callback_query.answer("Akun tidak ditemukan.", show_alert=True)
+
+    email = saved[actual_idx]["email"]
     # Set as Active (Touch)
-    if await db.db_touch_mail_session(user_id, mail_id):
+    if await db.db_touch_mail_session(user_id, email):
         await bot.answer_callback_query(callback_query.id, "✅ Akun diaktifkan!")
         # Force Refresh List UI
         # Construct callback data to trigger list refresh
@@ -3241,6 +3328,15 @@ async def switch_mail_callback(callback_query: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data == 'ignore')
 async def ignore_callback(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
+
+@dp.callback_query_handler(lambda c: c.data == 'refresh_mail')
+async def refresh_mail_callback(callback_query: types.CallbackQuery):
+    await bot.answer_callback_query(callback_query.id)
+    await show_mail_inbox(
+        callback_query.from_user.id,
+        message=callback_query.message,
+        edit_message=True
+    )
 
 
 def get_mail_message_detail(token, msg_id):
@@ -3265,7 +3361,7 @@ def delete_mail_message(token, msg_id):
 async def read_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     msg_id = callback_query.data.split('_')[1]
-    user_data = db.db_get_mail_session(user_id)
+    user_data = await db.db_get_mail_session(user_id)
     
     if not user_data:
         return await bot.answer_callback_query(callback_query.id, "⚠️ Sesi berakhir.", show_alert=True)
@@ -3307,7 +3403,7 @@ async def read_mail_callback(callback_query: types.CallbackQuery):
 async def delete_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     msg_id = callback_query.data.split('_')[1]
-    user_data = db.db_get_mail_session(user_id)
+    user_data = await db.db_get_mail_session(user_id)
     
     if user_data and delete_mail_message(user_data['token'], msg_id):
         await bot.answer_callback_query(callback_query.id, "✅ Pesan dihapus.")
@@ -3334,9 +3430,11 @@ async def fake_identity(message: types.Message):
     first_name_user = message.from_user.first_name
     
     args = message.text.split()
-    country_code = 'us'
-    if len(args) > 1:
-        country_code = args[1].lower()
+    if len(args) <= 1:
+        await show_fake_menu(user_id, message=message)
+        return
+
+    country_code = args[1].lower()
     
     try:
         # Generate Identity using the new module
@@ -3367,8 +3465,8 @@ async def fake_identity(message: types.Message):
             if await create_mail_account(email_addr, password):
                 token = await get_mail_token(email_addr, password)
                 if token:
-                    db.db_save_mail_session(user_id, email_addr, password, token)
-                    save_email_session(user_id, email_addr, password, token)
+                    await db.db_save_mail_session(user_id, email_addr, password, token)
+                    await save_email_session(user_id, email_addr, password, token)
                     email_status = "🟢 Active"
                 else:
                     email_status = "🔴 Error (Token)"
@@ -3527,26 +3625,24 @@ async def auto_check_mail():
             # 1. Fetch sessions due for check (Batch of 50)
             sessions = await db.db_get_pending_mail_sessions(limit=50)
             if not sessions:
-                await asyncio.sleep(5) # No pending, sleep short
+                await asyncio.sleep(10)
                 continue
                 
             tasks = []
-            now = time.time()
-            
             for data in sessions:
-                tasks.append(check_single_mail(data, now))
+                tasks.append(check_single_mail(data))
                 
             # Run batch concurrently
             await asyncio.gather(*tasks)
             
             # Avoid tight loop if processing is super fast
-            await asyncio.sleep(1)
+            await asyncio.sleep(10)
             
         except Exception as e:
             logging.error(f"Auto check mail error: {e}")
             await asyncio.sleep(15)
 
-async def check_single_mail(data, now):
+async def check_single_mail(data):
     user_id = data['user_id']
     token = data.get('token')
     last_id = data.get('last_msg_id')
@@ -3560,8 +3656,7 @@ async def check_single_mail(data, now):
             newest_id = newest_msg.get('id')
             
             if newest_id != last_id:
-                # Update DB: Last ID + Reset Timer (15s)
-                await db.db_update_mail_check_time(user_id, now + 15, newest_id)
+                await db.db_update_mail_last_id(user_id, newest_id)
                 
                 # Send Notification
                 sender = newest_msg.get('from', {}).get('address', 'Unknown')
@@ -3582,19 +3677,14 @@ async def check_single_mail(data, now):
                     if "bot was blocked" in str(e):
                         await db.db_delete_mail_session(user_id)
                 return
-
-        # Scenario 2: No New Message (Backoff)
-        # Increase check interval: 15s -> 30s -> 60s -> ... -> Max 300s
-        # Since we don't store current interval, we estimate based on probability or just random backoff
-        # Simpler: Just add 60s for now to save RU. Active users can refresh manually.
-        # Better: Add fixed 30s.
-        await db.db_update_mail_check_time(user_id, now + 30)
         
     except Exception:
-        # Error (Token invalid?): Push back 5 minutes
-        await db.db_update_mail_check_time(user_id, now + 300)
+        # Error (Token invalid?): ignore and try again in next cycle
+        return
 
 async def on_startup(dp):
+    await db.init_db()
+    await load_bot_state()
     # Try to set commands with retry logic
     for i in range(10):
         try:
