@@ -3167,30 +3167,16 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     
     # List Buttons
     for i, data in enumerate(current_page_items):
-        actual_idx = start_idx + i
         email = data['email']
         is_active = "✅ " if email == current_email else ""
-        
+
         if mode == "del":
             btn_text = f"🗑 Hapus: {email}"
-            # We need to pass ID for deletion now, or email. ID is better.
-            # But callback data limit.
-            # Let's try to use index from the list (RAM dependent) or just use ID if we have it.
-            # The new schema has `id`.
-            mail_id = data.get('id')
-            if mail_id:
-                cb_data = f"dm_mail_id_{mail_id}_{page}"
-            else:
-                # Fallback to index if ID not available (should be there)
-                cb_data = f"dm_mail_{actual_idx}_{page}"
+            cb_data = f"dm_mail_{page}_{i}"
         else:
             btn_text = f"{is_active}{email}"
-            mail_id = data.get('id')
-            if mail_id:
-                cb_data = f"sw_mail_id_{mail_id}_{page}"
-            else:
-                cb_data = f"sw_mail_{actual_idx}_{page}"
-            
+            cb_data = f"sw_mail_{page}_{i}"
+
         kb.add(types.InlineKeyboardButton(btn_text, callback_data=cb_data))
     
     # Navigation Buttons
@@ -3229,23 +3215,27 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
 async def delete_saved_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     parts = callback_query.data.split('_')
-    # Format: dm_mail_id_{id}_{page}
-    
-    mail_id = None
-    page = 0
-    
-    if 'id' in parts:
-        try:
-            mail_id = int(parts[3])
-            page = int(parts[4])
-        except: pass
-    else:
-        return await callback_query.answer("Mode lama tidak didukung.", show_alert=True)
-        
-    if not mail_id:
-        return await callback_query.answer("Error ID.")
-        
-    if await db.db_delete_mail_session(user_id, mail_id):
+    # Format: dm_mail_{page}_{index}
+    if len(parts) < 4:
+        return await callback_query.answer("Data tidak valid.", show_alert=True)
+
+    try:
+        page = int(parts[2])
+        idx = int(parts[3])
+    except ValueError:
+        return await callback_query.answer("Data tidak valid.", show_alert=True)
+
+    saved = await db.db_get_mail_sessions_list(user_id, limit=20)
+    if not saved:
+        return await callback_query.answer("Akun tidak ditemukan.", show_alert=True)
+
+    max_per_page = 5
+    actual_idx = page * max_per_page + idx
+    if actual_idx < 0 or actual_idx >= len(saved):
+        return await callback_query.answer("Akun tidak ditemukan.", show_alert=True)
+
+    email = saved[actual_idx]["email"]
+    if await db.db_delete_mail_session(user_id, email):
         await callback_query.answer("🗑 Akun dihapus.")
         # Refresh list
         callback_query.data = f"m_mail_list:{page}:del"
@@ -3256,24 +3246,8 @@ async def delete_saved_mail_callback(callback_query: types.CallbackQuery):
 
 @dp.message_handler(commands=['emails', 'listmail'], commands_prefix=PREFIX)
 async def list_emails(message: types.Message):
-    # Wrapper to call the callback logic with a dummy callback query
-    # Need to simulate sending the initial message first
     user_id = message.from_user.id
-    saved = SAVED_MAILS.get(user_id, [])
-    
-    # AUTO-RESTORE LOGIC
-    if not saved:
-        db_sess = await db.db_get_mail_session(user_id)
-        if db_sess:
-             # Reconstruct session object matching SAVED_MAILS format
-             restored = {
-                 "email": db_sess['email'],
-                 "password": db_sess['password'],
-                 "token": db_sess['token']
-             }
-             SAVED_MAILS[user_id] = [restored]
-             saved = SAVED_MAILS[user_id]
-    
+    saved = await db.db_get_mail_sessions_list(user_id, limit=20)
     if not saved:
         return await message.reply("⚠️ <b>Belum ada riwayat email.</b>")
 
@@ -3296,7 +3270,7 @@ async def list_emails(message: types.Message):
     for i, data in enumerate(current_page_items):
         email = data['email']
         is_active = "✅ " if email == current_email else ""
-        kb.add(types.InlineKeyboardButton(f"{is_active}{email}", callback_data=f"sw_mail_{i}_{page}"))
+        kb.add(types.InlineKeyboardButton(f"{is_active}{email}", callback_data=f"sw_mail_{page}_{i}"))
         
     nav_buttons = []
     nav_buttons.append(types.InlineKeyboardButton(f"📄 1/{total_pages}", callback_data="ignore"))
@@ -3315,26 +3289,30 @@ async def list_emails(message: types.Message):
 async def switch_mail_callback(callback_query: types.CallbackQuery):
     user_id = callback_query.from_user.id
     
-    # Format: sw_mail_id_{id}_{page} OR sw_mail_{index}_{page}
+    # Format: sw_mail_{page}_{index}
     parts = callback_query.data.split('_')
     
-    mail_id = None
-    page = 0
-    
-    if 'id' in parts:
-        try:
-            mail_id = int(parts[3])
-            page = int(parts[4])
-        except: pass
-    else:
-        # Legacy/RAM index support (best effort)
-        return await callback_query.answer("Mode lama tidak didukung. Silakan refresh list.", show_alert=True)
+    if len(parts) < 4:
+        return await callback_query.answer("Data tidak valid.", show_alert=True)
 
-    if not mail_id:
-        return await callback_query.answer("ID Akun tidak valid.")
+    try:
+        page = int(parts[2])
+        idx = int(parts[3])
+    except ValueError:
+        return await callback_query.answer("Data tidak valid.", show_alert=True)
 
+    saved = await db.db_get_mail_sessions_list(user_id, limit=20)
+    if not saved:
+        return await callback_query.answer("Akun tidak ditemukan.", show_alert=True)
+
+    max_per_page = 5
+    actual_idx = page * max_per_page + idx
+    if actual_idx < 0 or actual_idx >= len(saved):
+        return await callback_query.answer("Akun tidak ditemukan.", show_alert=True)
+
+    email = saved[actual_idx]["email"]
     # Set as Active (Touch)
-    if await db.db_touch_mail_session(user_id, mail_id):
+    if await db.db_touch_mail_session(user_id, email):
         await bot.answer_callback_query(callback_query.id, "✅ Akun diaktifkan!")
         # Force Refresh List UI
         # Construct callback data to trigger list refresh
@@ -3647,26 +3625,24 @@ async def auto_check_mail():
             # 1. Fetch sessions due for check (Batch of 50)
             sessions = await db.db_get_pending_mail_sessions(limit=50)
             if not sessions:
-                await asyncio.sleep(5) # No pending, sleep short
+                await asyncio.sleep(10)
                 continue
                 
             tasks = []
-            now = time.time()
-            
             for data in sessions:
-                tasks.append(check_single_mail(data, now))
+                tasks.append(check_single_mail(data))
                 
             # Run batch concurrently
             await asyncio.gather(*tasks)
             
             # Avoid tight loop if processing is super fast
-            await asyncio.sleep(1)
+            await asyncio.sleep(10)
             
         except Exception as e:
             logging.error(f"Auto check mail error: {e}")
             await asyncio.sleep(15)
 
-async def check_single_mail(data, now):
+async def check_single_mail(data):
     user_id = data['user_id']
     token = data.get('token')
     last_id = data.get('last_msg_id')
@@ -3680,8 +3656,7 @@ async def check_single_mail(data, now):
             newest_id = newest_msg.get('id')
             
             if newest_id != last_id:
-                # Update DB: Last ID + Reset Timer (15s)
-                await db.db_update_mail_check_time(user_id, now + 15, newest_id)
+                await db.db_update_mail_last_id(user_id, newest_id)
                 
                 # Send Notification
                 sender = newest_msg.get('from', {}).get('address', 'Unknown')
@@ -3702,17 +3677,10 @@ async def check_single_mail(data, now):
                     if "bot was blocked" in str(e):
                         await db.db_delete_mail_session(user_id)
                 return
-
-        # Scenario 2: No New Message (Backoff)
-        # Increase check interval: 15s -> 30s -> 60s -> ... -> Max 300s
-        # Since we don't store current interval, we estimate based on probability or just random backoff
-        # Simpler: Just add 60s for now to save RU. Active users can refresh manually.
-        # Better: Add fixed 30s.
-        await db.db_update_mail_check_time(user_id, now + 30)
         
     except Exception:
-        # Error (Token invalid?): Push back 5 minutes
-        await db.db_update_mail_check_time(user_id, now + 300)
+        # Error (Token invalid?): ignore and try again in next cycle
+        return
 
 async def on_startup(dp):
     await db.init_db()

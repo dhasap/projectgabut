@@ -433,16 +433,14 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
                 INDEX idx_user_note (user_id)
             )""",
             """CREATE TABLE IF NOT EXISTS temp_mail_sessions (
-                id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id BIGINT,
                 email VARCHAR(255),
                 password VARCHAR(255),
                 token VARCHAR(500),
                 last_msg_id VARCHAR(100),
-                next_check_at DATETIME,
                 created_at DATETIME,
                 INDEX idx_user_mail (user_id),
-                INDEX idx_next_check (next_check_at)
+                INDEX idx_created (created_at)
             )"""
         ]
         async with self.pool.acquire() as conn:
@@ -616,8 +614,8 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
 
     async def save_mail_session(self, user_id, email, password, token):
         # Insert as new history record
-        sql = """INSERT INTO temp_mail_sessions (user_id, email, password, token, created_at, next_check_at) 
-                 VALUES (%s, %s, %s, %s, NOW(), NOW())"""
+        sql = """INSERT INTO temp_mail_sessions (user_id, email, password, token, created_at) 
+                 VALUES (%s, %s, %s, %s, NOW())"""
         result = await self._exec(sql, (user_id, email, password, token))
         return result is not None
 
@@ -631,26 +629,36 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
 
     async def delete_mail_session(self, user_id, mail_id=None):
         if mail_id:
-            result = await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s AND id = %s", (user_id, mail_id))
+            result = await self._exec(
+                "DELETE FROM temp_mail_sessions WHERE user_id = %s AND email = %s",
+                (user_id, mail_id)
+            )
         else:
             result = await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
         return result is not None
 
     async def touch_mail_session(self, user_id, mail_id):
         # Bring to top (Active) by updating created_at
-        result = await self._exec("UPDATE temp_mail_sessions SET created_at = NOW() WHERE user_id = %s AND id = %s", (user_id, mail_id))
+        result = await self._exec(
+            "UPDATE temp_mail_sessions SET created_at = NOW() WHERE user_id = %s AND email = %s",
+            (user_id, mail_id)
+        )
         return result is not None
 
     async def get_pending_mail_sessions(self, limit=50):
-        # Fetch sessions where next_check_at is in the past
-        return await self._exec("SELECT user_id, token, last_msg_id FROM temp_mail_sessions WHERE next_check_at <= NOW() LIMIT %s", (limit,), fetch=True, dict_cursor=True) or []
+        return await self._exec(
+            "SELECT user_id, token, last_msg_id FROM temp_mail_sessions ORDER BY created_at DESC LIMIT %s",
+            (limit,),
+            fetch=True,
+            dict_cursor=True
+        ) or []
 
     async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None):
-        next_dt = datetime.fromtimestamp(next_check_timestamp)
         if last_msg_id:
-            await self._exec("UPDATE temp_mail_sessions SET next_check_at = %s, last_msg_id = %s WHERE user_id = %s", (next_dt, last_msg_id, user_id))
-        else:
-            await self._exec("UPDATE temp_mail_sessions SET next_check_at = %s WHERE user_id = %s", (next_dt, user_id))
+            await self._exec(
+                "UPDATE temp_mail_sessions SET last_msg_id = %s WHERE user_id = %s",
+                (last_msg_id, user_id)
+            )
 
     async def update_mail_last_id(self, user_id, msg_id):
         await self.update_mail_check_time(user_id, time.time(), msg_id)
