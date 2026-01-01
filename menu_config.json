@@ -49,18 +49,6 @@
       "type": "action"
     },
     {
-      "label": "🔄 Ganti Akun",
-      "action": "mail_list",
-      "row": 3,
-      "type": "action"
-    },
-    {
-      "label": "📥 Cek Inbox",
-      "action": "mail_inbox",
-      "row": 3,
-      "type": "action"
-    },
-    {
       "label": "ℹ️ Info User",
       "action": "info",
       "row": 4,

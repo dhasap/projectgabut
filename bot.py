@@ -571,18 +571,7 @@ Contoh:
     elif code == 'm_mail':
         await show_mail_menu(user.id)
     elif code == 'm_fake':
-        await bot.send_message(
-            user.id,
-            f'''
-<b>👤 Fake Identity</b>
-Buat identitas palsu lengkap dengan email aktif.
-Gunakan: <code>{PREFIX}fake [negara]</code>
-Contoh:
-• <code>{PREFIX}fake id</code> (Indonesia)
-• <code>{PREFIX}fake us</code> (Amerika)
-• <code>{PREFIX}fake kr</code> (Korea)
-'''
-        )
+        await show_fake_menu(user.id, message=callback_query.message)
     elif code == 'm_iban':
         kb = types.InlineKeyboardMarkup(row_width=3)
         # Ambil negara dari scraper
@@ -632,7 +621,7 @@ Contoh:
     elif code == 'm_main':
         # Fix: Reply Keyboard must be sent via send_message, not edit_message
         try:
-            await bot.edit_message_text("👇 <b>Menu Utama</b> telah dibuka di bawah.", chat_id=user.id, message_id=callback_query.message.message_id, parse_mode=types.ParseMode.HTML)
+            await bot.edit_message_text("✅ <b>Menu utama</b> siap digunakan di keyboard bawah.", chat_id=user.id, message_id=callback_query.message.message_id, parse_mode=types.ParseMode.HTML)
         except: pass
         
         is_adm = await is_owner(user.id)
@@ -641,7 +630,7 @@ Contoh:
         
         # FIX: Send Reply Keyboard separately to ensure it appears
         is_adm = await is_owner(user.id)
-        await bot.send_message(user.id, "👇 <b>Menu Utama</b>", reply_markup=get_reply_keyboard(is_adm))
+        await bot.send_message(user.id, "Silakan pilih menu di keyboard bawah.", reply_markup=get_reply_keyboard(is_adm))
 
 
 @dp.message_handler(commands=['start', 'help'], commands_prefix=PREFIX, state="*")
@@ -764,7 +753,7 @@ async def helpstr(message: types.Message, state: FSMContext):
     # Send Reply Keyboard (Menu Bawah) - Persistent Menu
     # Memastikan menu bawah muncul kembali (penting jika user hapus chat history)
     is_adm = await is_owner(message.from_user.id)
-    await message.answer("👇 <b>Menu Utama</b>", reply_markup=get_reply_keyboard(is_adm))
+    await message.answer("Silakan pilih menu di keyboard bawah.", reply_markup=get_reply_keyboard(is_adm))
 
 
 # --- NOTES FEATURE (INLINE INTERFACE) ---
@@ -2815,6 +2804,46 @@ async def show_mail_inbox(user_id, message: types.Message = None, edit_message=F
         return await message.reply(text, reply_markup=kb)
     return await bot.send_message(user_id, text, reply_markup=kb)
 
+async def show_fake_menu(user_id, message: types.Message = None):
+    countries = [
+        ("id", "🇮🇩 Indonesia"),
+        ("us", "🇺🇸 USA"),
+        ("jp", "🇯🇵 Japan"),
+        ("kr", "🇰🇷 Korea"),
+        ("sg", "🇸🇬 Singapore"),
+        ("my", "🇲🇾 Malaysia"),
+        ("ph", "🇵🇭 Philippines"),
+        ("th", "🇹🇭 Thailand"),
+        ("vn", "🇻🇳 Vietnam"),
+        ("in", "🇮🇳 India"),
+        ("cn", "🇨🇳 China"),
+        ("de", "🇩🇪 Germany"),
+        ("fr", "🇫🇷 France"),
+        ("it", "🇮🇹 Italy"),
+        ("es", "🇪🇸 Spain"),
+        ("ru", "🇷🇺 Russia"),
+        ("gb", "🇬🇧 UK"),
+        ("tr", "🇹🇷 Turkey"),
+        ("nl", "🇳🇱 Netherlands"),
+        ("pl", "🇵🇱 Poland"),
+    ]
+
+    kb = types.InlineKeyboardMarkup(row_width=3)
+    buttons = [types.InlineKeyboardButton(label, callback_data=f"fake_{code}") for code, label in countries]
+    for i in range(0, len(buttons), 3):
+        kb.row(*buttons[i:i + 3])
+    kb.add(types.InlineKeyboardButton("🔙 Menu Utama", callback_data="m_main"))
+
+    text = (
+        "<b>👤 PILIH NEGARA FAKE ID</b>\n"
+        "Silakan pilih negara yang ingin dibuat."
+    )
+
+    if message:
+        await message.reply(text, reply_markup=kb)
+    else:
+        await bot.send_message(user_id, text, reply_markup=kb)
+
 @dp.message_handler(commands=['mail'], commands_prefix=PREFIX)
 async def gen_mail(message: types.Message):
     await show_mail_menu(message.from_user.id, message=message)
@@ -3423,9 +3452,11 @@ async def fake_identity(message: types.Message):
     first_name_user = message.from_user.first_name
     
     args = message.text.split()
-    country_code = 'us'
-    if len(args) > 1:
-        country_code = args[1].lower()
+    if len(args) <= 1:
+        await show_fake_menu(user_id, message=message)
+        return
+
+    country_code = args[1].lower()
     
     try:
         # Generate Identity using the new module
