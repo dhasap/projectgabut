@@ -255,7 +255,7 @@ class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
                 "created_at": datetime.utcnow().isoformat(),
                 "next_check_at": datetime.utcnow().isoformat()
             }
-            self.client.table("temp_mail_sessions").insert(payload).execute()
+            self.client.table("mail_sessions_v2").insert(payload).execute()
             return True
         except Exception as e:
             logging.error(f"Supabase save_mail_session error: {e}")
@@ -267,7 +267,7 @@ class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
     def _get_mail_session_sync(self, user_id):
         try:
             res = (
-                self.client.table("temp_mail_sessions")
+                self.client.table("mail_sessions_v2")
                 .select("*")
                 .eq("user_id", user_id)
                 .order("created_at", desc=True)
@@ -285,7 +285,7 @@ class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
     def _get_mail_sessions_list_sync(self, user_id, limit):
         try:
             res = (
-                self.client.table("temp_mail_sessions")
+                self.client.table("mail_sessions_v2")
                 .select("*")
                 .eq("user_id", user_id)
                 .order("created_at", desc=True)
@@ -302,7 +302,7 @@ class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
 
     def _delete_mail_session_sync(self, user_id, mail_id):
         try:
-            query = self.client.table("temp_mail_sessions").delete().eq("user_id", user_id)
+            query = self.client.table("mail_sessions_v2").delete().eq("user_id", user_id)
             if mail_id:
                 query = query.eq("id", mail_id)
             res = query.execute()
@@ -318,7 +318,7 @@ class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
         try:
             payload = {"created_at": datetime.utcnow().isoformat()}
             res = (
-                self.client.table("temp_mail_sessions")
+                self.client.table("mail_sessions_v2")
                 .update(payload)
                 .eq("user_id", user_id)
                 .eq("id", mail_id)
@@ -336,7 +336,7 @@ class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
         try:
             now = datetime.utcnow().isoformat()
             res = (
-                self.client.table("temp_mail_sessions")
+                self.client.table("mail_sessions_v2")
                 .select("user_id,token,last_msg_id")
                 .lte("next_check_at", now)
                 .limit(limit)
@@ -355,7 +355,7 @@ class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
             payload = {"next_check_at": datetime.fromtimestamp(next_check_timestamp).isoformat()}
             if last_msg_id:
                 payload["last_msg_id"] = last_msg_id
-            self.client.table("temp_mail_sessions").update(payload).eq("user_id", user_id).execute()
+            self.client.table("mail_sessions_v2").update(payload).eq("user_id", user_id).execute()
         except Exception as e:
             logging.error(f"Supabase update_mail_check_time error: {e}")
 
@@ -442,7 +442,7 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
                 UNIQUE KEY unique_note (user_id, title),
                 INDEX idx_user_note (user_id)
             )""",
-            """CREATE TABLE IF NOT EXISTS temp_mail_sessions (
+            """CREATE TABLE IF NOT EXISTS mail_sessions_v2 (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id BIGINT,
                 email VARCHAR(255),
@@ -461,7 +461,7 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
 
     async def recreate_tables(self):
         drop_queries = [
-            "DROP TABLE IF EXISTS temp_mail_sessions",
+            "DROP TABLE IF EXISTS mail_sessions_v2",
             "DROP TABLE IF EXISTS notes",
             "DROP TABLE IF EXISTS activity_logs",
             "DROP TABLE IF EXISTS bot_state",
@@ -641,40 +641,40 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
 
     async def save_mail_session(self, user_id, email, password, token):
         # Insert as new history record
-        sql = """INSERT INTO temp_mail_sessions (user_id, email, password, token, created_at) 
+        sql = """INSERT INTO mail_sessions_v2 (user_id, email, password, token, created_at) 
                  VALUES (%s, %s, %s, %s, NOW())"""
         result = await self._exec(sql, (user_id, email, password, token))
         return result is not None
 
     async def get_mail_session(self, user_id):
         # Get latest active session (highest ID/created_at)
-        return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = %s ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
+        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = %s ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
 
     async def get_mail_sessions_list(self, user_id, limit=20):
         # List history
-        return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = %s ORDER BY created_at DESC LIMIT %s", (user_id, limit), fetch=True, dict_cursor=True) or []
+        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = %s ORDER BY created_at DESC LIMIT %s", (user_id, limit), fetch=True, dict_cursor=True) or []
 
     async def delete_mail_session(self, user_id, mail_id=None):
         if mail_id:
             result = await self._exec(
-                "DELETE FROM temp_mail_sessions WHERE user_id = %s AND email = %s",
+                "DELETE FROM mail_sessions_v2 WHERE user_id = %s AND email = %s",
                 (user_id, mail_id)
             )
         else:
-            result = await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
+            result = await self._exec("DELETE FROM mail_sessions_v2 WHERE user_id = %s", (user_id,))
         return result is not None
 
     async def touch_mail_session(self, user_id, mail_id):
         # Bring to top (Active) by updating created_at
         result = await self._exec(
-            "UPDATE temp_mail_sessions SET created_at = NOW() WHERE user_id = %s AND email = %s",
+            "UPDATE mail_sessions_v2 SET created_at = NOW() WHERE user_id = %s AND email = %s",
             (user_id, mail_id)
         )
         return result is not None
 
     async def get_pending_mail_sessions(self, limit=50):
         return await self._exec(
-            "SELECT user_id, token, last_msg_id FROM temp_mail_sessions ORDER BY created_at DESC LIMIT %s",
+            "SELECT user_id, token, last_msg_id FROM mail_sessions_v2 ORDER BY created_at DESC LIMIT %s",
             (limit,),
             fetch=True,
             dict_cursor=True
@@ -683,7 +683,7 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
     async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None):
         if last_msg_id:
             await self._exec(
-                "UPDATE temp_mail_sessions SET last_msg_id = %s WHERE user_id = %s",
+                "UPDATE mail_sessions_v2 SET last_msg_id = %s WHERE user_id = %s",
                 (last_msg_id, user_id)
             )
 
@@ -739,7 +739,7 @@ class AsyncSQLiteAdapter(AsyncDatabaseAdapter):
                 updated_at TEXT,
                 UNIQUE (user_id, title)
             )""",
-            """CREATE TABLE IF NOT EXISTS temp_mail_sessions (
+            """CREATE TABLE IF NOT EXISTS mail_sessions_v2 (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
                 email TEXT,
@@ -876,22 +876,22 @@ class AsyncSQLiteAdapter(AsyncDatabaseAdapter):
         return affected and affected > 0
 
     async def save_mail_session(self, user_id, email, password, token):
-        sql = """INSERT INTO temp_mail_sessions (user_id, email, password, token, created_at) 
+        sql = """INSERT INTO mail_sessions_v2 (user_id, email, password, token, created_at) 
                  VALUES (?, ?, ?, ?, ?)"""
         res = await self._exec(sql, (user_id, email, password, token, datetime.utcnow().isoformat()))
         return res is not None
 
     async def get_mail_session(self, user_id):
-        return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
+        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = ? ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
 
     async def get_mail_sessions_list(self, user_id, limit=20):
-        return await self._exec("SELECT * FROM temp_mail_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit), fetch=True, dict_cursor=True) or []
+        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit), fetch=True, dict_cursor=True) or []
 
     async def delete_mail_session(self, user_id, mail_id=None):
         if mail_id:
-            res = await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = ? AND email = ?", (user_id, mail_id))
+            res = await self._exec("DELETE FROM mail_sessions_v2 WHERE user_id = ? AND email = ?", (user_id, mail_id))
         else:
-            res = await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = ?", (user_id,))
+            res = await self._exec("DELETE FROM mail_sessions_v2 WHERE user_id = ?", (user_id,))
         return res is not None
 
     async def get_pending_mail_sessions(self, limit=50):
