@@ -2884,7 +2884,11 @@ async def create_random_mail(message: types.Message):
             USER_MAIL_COOLDOWN[user_id] = time.time()
             
             # Save to DB
-            await db.db_save_mail_session(user_id, email, password, token)
+            if await db.db_save_mail_session(user_id, email, password, token):
+                logging.info(f"✅ Mail session saved for {user_id}: {email}")
+            else:
+                logging.error(f"❌ Failed to save mail session for {user_id}: {email}")
+                await message.reply("⚠️ <b>Warning:</b> Gagal menyimpan sesi ke database. Akun tetap bisa digunakan tapi tidak akan muncul di riwayat.")
             
             kb = types.InlineKeyboardMarkup(row_width=2)
             kb.add(types.InlineKeyboardButton("📩 Cek Inbox (0)", callback_data="refresh_mail"))
