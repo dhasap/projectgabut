@@ -9,3 +9,4 @@ cryptography
 aiomysql
 redis
 async_timeout
+aiosqlite

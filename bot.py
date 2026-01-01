@@ -310,24 +310,6 @@ async def unban_user(user_id):
 # TEMP MAIL STORAGE
 # USER_MAILS = {} # Moved to DB: temp_mail_sessions
 LAST_GEN_ID = {} # Last Generated Fake ID (for Save to Note feature)
-SAVED_MAILS = {} # History List: {user_id: [ {email, password, token}, ... ]}
-
-async def save_email_session(user_id, email, password, token):
-    """Menyimpan sesi email ke history user dan DB secara Async."""
-    if user_id not in SAVED_MAILS:
-        SAVED_MAILS[user_id] = []
-    
-    # Cek duplikasi di RAM
-    SAVED_MAILS[user_id] = [x for x in SAVED_MAILS[user_id] if x['email'] != email]
-    
-    # Masukkan ke index 0 (paling baru)
-    new_data = {"email": email, "password": password, "token": token}
-    SAVED_MAILS[user_id].insert(0, new_data)
-    
-    if len(SAVED_MAILS[user_id]) > 10:
-        SAVED_MAILS[user_id].pop()
-        
-    await db.db_save_mail_session(user_id, email, password, token) 
 
 # BOT INFO
 loop = asyncio.get_event_loop()
@@ -2901,8 +2883,8 @@ async def create_random_mail(message: types.Message):
             # Update Cooldown
             USER_MAIL_COOLDOWN[user_id] = time.time()
             
-            # Save to DB and RAM
-            await save_email_session(user_id, email, password, token)
+            # Save to DB
+            await db.db_save_mail_session(user_id, email, password, token)
             
             kb = types.InlineKeyboardMarkup(row_width=2)
             kb.add(types.InlineKeyboardButton("📩 Cek Inbox (0)", callback_data="refresh_mail"))
@@ -2944,8 +2926,8 @@ async def login_mail(message: types.Message):
     token = await get_mail_token(email, password)
     
     if token:
-        # Save to DB and RAM
-        await save_email_session(user_id, email, password, token)
+        # Save to DB
+        await db.db_save_mail_session(user_id, email, password, token)
         
         kb = types.InlineKeyboardMarkup(row_width=2)
         kb.add(types.InlineKeyboardButton("📩 Cek Inbox", callback_data="refresh_mail"))
@@ -3070,7 +3052,7 @@ async def execute_custom_mail(message: types.Message, state: FSMContext, passwor
             USER_MAIL_COOLDOWN[user_id] = time.time()
             
             # Save
-            await save_email_session(user_id, email, password, token)
+            await db.db_save_mail_session(user_id, email, password, token)
             
             kb = types.InlineKeyboardMarkup(row_width=2)
             kb.add(types.InlineKeyboardButton("📩 Cek Inbox (0)", callback_data="refresh_mail"))
@@ -3466,7 +3448,6 @@ async def fake_identity(message: types.Message):
                 token = await get_mail_token(email_addr, password)
                 if token:
                     await db.db_save_mail_session(user_id, email_addr, password, token)
-                    await save_email_session(user_id, email_addr, password, token)
                     email_status = "🟢 Active"
                 else:
                     email_status = "🔴 Error (Token)"
