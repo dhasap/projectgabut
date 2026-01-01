@@ -365,6 +365,7 @@ class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
 # --- MYSQL / TiDB IMPLEMENTATION (PURE ASYNC) ---
 class AsyncMySQLAdapter(AsyncDatabaseAdapter):
     def __init__(self, host, port, user, password, db_name, ssl_ca=None):
+        import certifi
         self.db_config = {
             'host': host,
             'port': port,
@@ -376,8 +377,21 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
             'charset': 'utf8mb4',
             'use_unicode': True
         }
-        if ssl_ca and os.path.exists(ssl_ca):
-            self.db_config['ssl'] = {'ca': ssl_ca}
+        
+        # Smart SSL Handling
+        ca_path = ssl_ca
+        if ssl_ca and not os.path.exists(ssl_ca):
+            logging.warning(f"⚠️ SSL CA file '{ssl_ca}' not found. Using system certs (certifi).")
+            ca_path = certifi.where()
+        elif not ssl_ca:
+             # Default fallback if env not set
+             ca_path = certifi.where()
+             
+        if ca_path and os.path.exists(ca_path):
+            self.db_config['ssl'] = {'ca': ca_path}
+            logging.info(f"🔒 SSL Configured using: {ca_path}")
+        else:
+            logging.warning("⚠️ No SSL CA found. Connection might fail if TiDB requires SSL.")
         
         self.pool = None
 

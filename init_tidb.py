@@ -1,5 +1,6 @@
 import os
 import pymysql
+import certifi
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -16,9 +17,14 @@ def init_tidb_manual():
     
     print(f"Connecting to {host} as {user}...")
     
+    # Smart SSL Handling
     ssl_config = None
     if ssl_ca and os.path.exists(ssl_ca):
         ssl_config = {'ca': ssl_ca}
+        print(f"🔒 Using provided CA: {ssl_ca}")
+    else:
+        print(f"⚠️ Provided CA '{ssl_ca}' not found. Falling back to certifi.")
+        ssl_config = {'ca': certifi.where()}
 
     try:
         conn = pymysql.connect(
