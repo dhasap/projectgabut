@@ -1,52 +1,72 @@
 {
   "reply_menu": [
     {
-      "label": "💳 Checker",
+      "label": "💳 BIN Check",
+      "action": "bin",
+      "row": 1,
+      "type": "action"
+    },
+    {
+      "label": "🎲 Random BIN",
+      "action": "rnd",
+      "row": 1,
+      "type": "action"
+    },
+    {
+      "label": "✅ Check CC",
       "action": "chk",
       "row": 1,
       "type": "action"
     },
     {
-      "label": "⚙️ Generator",
-      "action": "gen",
-      "row": 1,
+      "label": "👤 Fake ID",
+      "action": "fake",
+      "row": 2,
       "type": "action"
     },
     {
-      "label": "📧 Temp Mail",
+      "label": "✉️ Temp Mail",
       "action": "mail",
       "row": 2,
       "type": "action"
     },
     {
-      "label": "📝 Notes",
-      "action": "note",
+      "label": "⚙️ CC Gen",
+      "action": "gen",
       "row": 2,
       "type": "action"
     },
     {
-      "label": "👤 Fake ID",
-      "action": "fake",
+      "label": "📝 Catatan",
+      "action": "note",
       "row": 3,
       "type": "action"
     },
     {
-      "label": "ℹ️ Info",
-      "action": "info",
+      "label": "🏦 IBAN",
+      "action": "iban",
       "row": 3,
+      "type": "action"
+    },
+    {
+      "label": "ℹ️ Info User",
+      "action": "info",
+      "row": 4,
+      "type": "action"
+    },
+    {
+      "label": "❓ Help & Menu",
+      "action": "help",
+      "row": 4,
       "type": "action"
     }
   ],
   "admin_menu": [
     {
-      "label": "📊 Stats",
-      "action": "admin_stats",
-      "row": 1
-    },
-    {
-      "label": "🔙 Exit Admin",
-      "action": "admin_exit",
-      "row": 2
+      "label": "🛠️ Admin Panel",
+      "action": "admin",
+      "row": 1,
+      "type": "action"
     }
   ],
   "inline_messages": {}
