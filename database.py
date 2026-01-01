@@ -385,7 +385,11 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
                 **self.db_config
             )
             logging.info("✅ Menggunakan Database: TiDB (Async Pool Optimized)")
-            await self.initialize_tables()
+            if os.getenv("RESET_DB", "").lower() in {"1", "true", "yes"}:
+                logging.warning("⚠️ RESET_DB aktif, menghapus & membuat ulang semua tabel.")
+                await self.recreate_tables()
+            else:
+                await self.initialize_tables()
         except Exception as e:
             logging.error(f"❌ Failed creating DB Pool: {e}")
             raise e
@@ -447,6 +451,22 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
             async with conn.cursor() as cur:
                 for q in queries:
                     await cur.execute(q)
+
+    async def recreate_tables(self):
+        drop_queries = [
+            "DROP TABLE IF EXISTS temp_mail_sessions",
+            "DROP TABLE IF EXISTS notes",
+            "DROP TABLE IF EXISTS activity_logs",
+            "DROP TABLE IF EXISTS bot_state",
+            "DROP TABLE IF EXISTS banned",
+            "DROP TABLE IF EXISTS admins",
+            "DROP TABLE IF EXISTS users",
+        ]
+        async with self.pool.acquire() as conn:
+            async with conn.cursor() as cur:
+                for q in drop_queries:
+                    await cur.execute(q)
+        await self.initialize_tables()
 
     async def _exec(self, query, args=None, fetch=False, fetch_one=False, dict_cursor=False):
         """Internal helper for metrics and execution."""
