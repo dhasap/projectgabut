@@ -127,6 +127,235 @@ class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
     async def get_admins(self, owner_id):
         return {int(owner_id)} 
 
+    async def save_state(self, state_data):
+        await asyncio.to_thread(self._save_state_sync, state_data)
+
+    def _save_state_sync(self, state_data):
+        try:
+            payload = {"key": "bot_config", "value": state_data}
+            self.client.table("bot_state").upsert(payload, on_conflict="key").execute()
+        except Exception as e:
+            logging.error(f"Supabase save_state error: {e}")
+
+    async def load_state(self):
+        return await asyncio.to_thread(self._load_state_sync)
+
+    def _load_state_sync(self):
+        try:
+            res = self.client.table("bot_state").select("value").eq("key", "bot_config").limit(1).execute()
+            if res.data:
+                return res.data[0].get("value") or {}
+        except Exception as e:
+            logging.error(f"Supabase load_state error: {e}")
+        return {}
+
+    async def set_config(self, key, value):
+        await asyncio.to_thread(self._set_config_sync, key, value)
+
+    def _set_config_sync(self, key, value):
+        try:
+            payload = {"key": key, "value": {"text": value}}
+            self.client.table("bot_state").upsert(payload, on_conflict="key").execute()
+        except Exception as e:
+            logging.error(f"Supabase set_config error: {e}")
+
+    async def save_note(self, user_id, title, content):
+        return await asyncio.to_thread(self._save_note_sync, user_id, title, content)
+
+    def _save_note_sync(self, user_id, title, content):
+        try:
+            cipher = _get_cipher_suite()
+            encrypted_content = cipher.encrypt(content.encode()).decode()
+            payload = {
+                "user_id": user_id,
+                "title": title,
+                "content": encrypted_content,
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            self.client.table("notes").upsert(payload, on_conflict="user_id,title").execute()
+            return True
+        except Exception as e:
+            logging.error(f"Supabase save_note error: {e}")
+            return False
+
+    async def get_notes_list(self, user_id):
+        return await asyncio.to_thread(self._get_notes_list_sync, user_id)
+
+    def _get_notes_list_sync(self, user_id):
+        try:
+            res = (
+                self.client.table("notes")
+                .select("id,title,updated_at")
+                .eq("user_id", user_id)
+                .order("id", desc=True)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logging.error(f"Supabase get_notes_list error: {e}")
+            return []
+
+    async def get_note_content(self, user_id, identifier):
+        return await asyncio.to_thread(self._get_note_content_sync, user_id, identifier)
+
+    def _get_note_content_sync(self, user_id, identifier):
+        try:
+            query = self.client.table("notes").select("content,title").eq("user_id", user_id)
+            if str(identifier).isdigit():
+                query = query.eq("id", int(identifier))
+            else:
+                query = query.eq("title", identifier)
+            res = query.limit(1).execute()
+            if not res.data:
+                return None
+            row = res.data[0]
+            cipher = _get_cipher_suite()
+            try:
+                decrypted = cipher.decrypt(row["content"].encode()).decode()
+            except Exception as e:
+                logging.error(f"Supabase decrypt error: {e}")
+                decrypted = "[Error: Gagal dekripsi catatan]"
+            return {"title": row.get("title"), "content": decrypted}
+        except Exception as e:
+            logging.error(f"Supabase get_note_content error: {e}")
+            return None
+
+    async def delete_note(self, user_id, identifier):
+        return await asyncio.to_thread(self._delete_note_sync, user_id, identifier)
+
+    def _delete_note_sync(self, user_id, identifier):
+        try:
+            query = self.client.table("notes").delete().eq("user_id", user_id)
+            if str(identifier).isdigit():
+                query = query.eq("id", int(identifier))
+            else:
+                query = query.eq("title", identifier)
+            res = query.execute()
+            return bool(res.data)
+        except Exception as e:
+            logging.error(f"Supabase delete_note error: {e}")
+            return False
+
+    async def save_mail_session(self, user_id, email, password, token):
+        return await asyncio.to_thread(self._save_mail_session_sync, user_id, email, password, token)
+
+    def _save_mail_session_sync(self, user_id, email, password, token):
+        try:
+            payload = {
+                "user_id": user_id,
+                "email": email,
+                "password": password,
+                "token": token,
+                "created_at": datetime.utcnow().isoformat(),
+                "next_check_at": datetime.utcnow().isoformat()
+            }
+            self.client.table("temp_mail_sessions").insert(payload).execute()
+            return True
+        except Exception as e:
+            logging.error(f"Supabase save_mail_session error: {e}")
+            return False
+
+    async def get_mail_session(self, user_id):
+        return await asyncio.to_thread(self._get_mail_session_sync, user_id)
+
+    def _get_mail_session_sync(self, user_id):
+        try:
+            res = (
+                self.client.table("temp_mail_sessions")
+                .select("*")
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+            return res.data[0] if res.data else None
+        except Exception as e:
+            logging.error(f"Supabase get_mail_session error: {e}")
+            return None
+
+    async def get_mail_sessions_list(self, user_id, limit=20):
+        return await asyncio.to_thread(self._get_mail_sessions_list_sync, user_id, limit)
+
+    def _get_mail_sessions_list_sync(self, user_id, limit):
+        try:
+            res = (
+                self.client.table("temp_mail_sessions")
+                .select("*")
+                .eq("user_id", user_id)
+                .order("created_at", desc=True)
+                .limit(limit)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logging.error(f"Supabase get_mail_sessions_list error: {e}")
+            return []
+
+    async def delete_mail_session(self, user_id, mail_id=None):
+        return await asyncio.to_thread(self._delete_mail_session_sync, user_id, mail_id)
+
+    def _delete_mail_session_sync(self, user_id, mail_id):
+        try:
+            query = self.client.table("temp_mail_sessions").delete().eq("user_id", user_id)
+            if mail_id:
+                query = query.eq("id", mail_id)
+            res = query.execute()
+            return bool(res.data)
+        except Exception as e:
+            logging.error(f"Supabase delete_mail_session error: {e}")
+            return False
+
+    async def touch_mail_session(self, user_id, mail_id):
+        return await asyncio.to_thread(self._touch_mail_session_sync, user_id, mail_id)
+
+    def _touch_mail_session_sync(self, user_id, mail_id):
+        try:
+            payload = {"created_at": datetime.utcnow().isoformat()}
+            res = (
+                self.client.table("temp_mail_sessions")
+                .update(payload)
+                .eq("user_id", user_id)
+                .eq("id", mail_id)
+                .execute()
+            )
+            return bool(res.data)
+        except Exception as e:
+            logging.error(f"Supabase touch_mail_session error: {e}")
+            return False
+
+    async def get_pending_mail_sessions(self, limit=50):
+        return await asyncio.to_thread(self._get_pending_mail_sessions_sync, limit)
+
+    def _get_pending_mail_sessions_sync(self, limit):
+        try:
+            now = datetime.utcnow().isoformat()
+            res = (
+                self.client.table("temp_mail_sessions")
+                .select("user_id,token,last_msg_id")
+                .lte("next_check_at", now)
+                .limit(limit)
+                .execute()
+            )
+            return res.data or []
+        except Exception as e:
+            logging.error(f"Supabase get_pending_mail_sessions error: {e}")
+            return []
+
+    async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None):
+        await asyncio.to_thread(self._update_mail_check_time_sync, user_id, next_check_timestamp, last_msg_id)
+
+    def _update_mail_check_time_sync(self, user_id, next_check_timestamp, last_msg_id=None):
+        try:
+            payload = {"next_check_at": datetime.fromtimestamp(next_check_timestamp).isoformat()}
+            if last_msg_id:
+                payload["last_msg_id"] = last_msg_id
+            self.client.table("temp_mail_sessions").update(payload).eq("user_id", user_id).execute()
+        except Exception as e:
+            logging.error(f"Supabase update_mail_check_time error: {e}")
+
+    async def update_mail_last_id(self, user_id, msg_id):
+        await self.update_mail_check_time(user_id, time.time(), msg_id)
+
 # --- MYSQL / TiDB IMPLEMENTATION (PURE ASYNC) ---
 class AsyncMySQLAdapter(AsyncDatabaseAdapter):
     def __init__(self, host, port, user, password, db_name, ssl_ca=None):
@@ -352,8 +581,8 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
         sql = """INSERT INTO notes (user_id, title, content, updated_at) 
                  VALUES (%s, %s, %s, NOW())
                  ON DUPLICATE KEY UPDATE content=%s, updated_at=NOW()"""
-        await self._exec(sql, (user_id, title, encrypted_content, encrypted_content))
-        return True
+        result = await self._exec(sql, (user_id, title, encrypted_content, encrypted_content))
+        return result is not None
 
     async def get_notes_list(self, user_id):
         # Select ID and Title explicitly for the menu
@@ -389,8 +618,8 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
         # Insert as new history record
         sql = """INSERT INTO temp_mail_sessions (user_id, email, password, token, created_at, next_check_at) 
                  VALUES (%s, %s, %s, %s, NOW(), NOW())"""
-        await self._exec(sql, (user_id, email, password, token))
-        return True
+        result = await self._exec(sql, (user_id, email, password, token))
+        return result is not None
 
     async def get_mail_session(self, user_id):
         # Get latest active session (highest ID/created_at)
@@ -402,15 +631,15 @@ class AsyncMySQLAdapter(AsyncDatabaseAdapter):
 
     async def delete_mail_session(self, user_id, mail_id=None):
         if mail_id:
-            await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s AND id = %s", (user_id, mail_id))
+            result = await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s AND id = %s", (user_id, mail_id))
         else:
-            await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
-        return True
+            result = await self._exec("DELETE FROM temp_mail_sessions WHERE user_id = %s", (user_id,))
+        return result is not None
 
     async def touch_mail_session(self, user_id, mail_id):
         # Bring to top (Active) by updating created_at
-        await self._exec("UPDATE temp_mail_sessions SET created_at = NOW() WHERE user_id = %s AND id = %s", (user_id, mail_id))
-        return True
+        result = await self._exec("UPDATE temp_mail_sessions SET created_at = NOW() WHERE user_id = %s AND id = %s", (user_id, mail_id))
+        return result is not None
 
     async def get_pending_mail_sessions(self, limit=50):
         # Fetch sessions where next_check_at is in the past

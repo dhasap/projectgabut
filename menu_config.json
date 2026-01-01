@@ -7,7 +7,7 @@
       "type": "action"
     },
     {
-      "label": "🎲 Rnd BIN",
+      "label": "🎲 Random BIN",
       "action": "rnd",
       "row": 1,
       "type": "action"
@@ -37,8 +37,14 @@
       "type": "action"
     },
     {
-      "label": "📥 Cek Inbox",
-      "action": "mail_inbox",
+      "label": "📝 Catatan",
+      "action": "note",
+      "row": 3,
+      "type": "action"
+    },
+    {
+      "label": "🏦 IBAN",
+      "action": "iban",
       "row": 3,
       "type": "action"
     },
@@ -49,7 +55,13 @@
       "type": "action"
     },
     {
-      "label": "ℹ️ Info Bot",
+      "label": "📥 Cek Inbox",
+      "action": "mail_inbox",
+      "row": 3,
+      "type": "action"
+    },
+    {
+      "label": "ℹ️ Info User",
       "action": "info",
       "row": 4,
       "type": "action"
@@ -65,7 +77,8 @@
     {
       "label": "🛠️ Admin Panel",
       "action": "admin",
-      "row": 1
+      "row": 1,
+      "type": "action"
     }
   ],
   "inline_messages": {}

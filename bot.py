@@ -430,7 +430,7 @@ def get_admin_keyboard():
     markup.row("🎹 Menu Editor", "✏️ Edit Texts") # Added Menu Editor
     markup.row("👁️ Spy Mode", "🚧 Maint. Mode")
     markup.row("📜 Admin Logs", "🏥 System Health")
-    markup.row("👥 Admins", "🔙 Exit Admin")
+    markup.row("👥 Admins", "🚪 Exit Admin")
     return markup
 
 async def log_admin_action(user, action, details):
@@ -1379,7 +1379,7 @@ async def cmd_set_help(message: types.Message):
     await log_admin_action(message.from_user, "SET_HELP", "Updated help message")
     await message.reply("✅ Pesan Help berhasil diubah!")
 
-@dp.message_handler(lambda message: message.text in ["📊 Stats", "📢 Broadcast", "⛔ User Control", "🎛️ Features", "👁️ Spy Mode", "🚧 Maint. Mode", "🏥 System Health", "👥 Admins", "🔙 Exit Admin", "✏️ Edit Texts", "📜 Admin Logs", "🎹 Menu Editor"])
+@dp.message_handler(lambda message: message.text in ["📊 Stats", "📢 Broadcast", "⛔ User Control", "🎛️ Features", "👁️ Spy Mode", "🚧 Maint. Mode", "🏥 System Health", "👥 Admins", "🚪 Exit Admin", "✏️ Edit Texts", "📜 Admin Logs", "🎹 Menu Editor"])
 async def process_admin_keyboard(message: types.Message):
     if message.from_user.id not in await get_admins(): return
     
@@ -1596,7 +1596,7 @@ async def process_admin_keyboard(message: types.Message):
             "<b>📜 LAST 15 ADMIN LOGS</b>\n━━━━━━━━━━━━━━━━━━\n" + "\n\n".join(log_lines)
         )
         
-    elif text == "🔙 Exit Admin":
+    elif text == "🚪 Exit Admin":
         await message.reply("Kembali ke menu utama.", reply_markup=get_reply_keyboard(is_admin=True))
 
 # --- MENU EDITOR HANDLERS ---
@@ -3456,8 +3456,8 @@ async def fake_identity(message: types.Message):
             if await create_mail_account(email_addr, password):
                 token = await get_mail_token(email_addr, password)
                 if token:
-                    db.db_save_mail_session(user_id, email_addr, password, token)
-                    save_email_session(user_id, email_addr, password, token)
+                    await db.db_save_mail_session(user_id, email_addr, password, token)
+                    await save_email_session(user_id, email_addr, password, token)
                     email_status = "🟢 Active"
                 else:
                     email_status = "🔴 Error (Token)"
