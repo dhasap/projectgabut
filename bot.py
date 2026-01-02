@@ -409,6 +409,33 @@ class ForceSubMiddleware(BaseMiddleware):
 # Setup Middleware
 # dp.middleware.setup(ForceSubMiddleware())
 
+@dp.chat_member_handler()
+async def on_channel_status_change(update: types.ChatMemberUpdated):
+    """
+    Smart Monitor: Menghapus cache user secara instan jika mereka keluar dari channel.
+    Membutuhkan Bot menjadi Admin di Channel.
+    """
+    if not FORCE_SUB_CHANNEL:
+        return
+
+    # Ambil username channel target (tanpa @)
+    target_username = FORCE_SUB_CHANNEL.replace('@', '').lower()
+    event_username = (update.chat.username or "").lower()
+    
+    # Validasi: Pastikan event ini dari channel target
+    # Jika FORCE_SUB_CHANNEL berupa ID, kita skip check username dan asumsi bot admin di tempat yang benar
+    if target_username and target_username != event_username:
+        return
+
+    user_id = update.from_user.id
+    new_status = update.new_chat_member.status
+    
+    # Jika user keluar atau di-kick
+    if new_status in ['left', 'kicked', 'banned']:
+        if user_id in FORCE_SUB_CACHE:
+            del FORCE_SUB_CACHE[user_id]
+            logging.info(f"Security: User {user_id} left channel. Cache cleared.")
+
 # --- DATABASE SETUP ---
 import database as db
 
