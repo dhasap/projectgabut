@@ -38,6 +38,10 @@ class MailCustomState(StatesGroup):
     username = State()
     password = State()
 
+class MailLoginState(StatesGroup):
+    waiting_for_email = State()
+    waiting_for_password = State()
+
 # --- DYNAMIC MENU STATES ---
 class MenuReplyState(StatesGroup):
     waiting_label = State()
@@ -51,6 +55,9 @@ class MenuInlineState(StatesGroup):
     waiting_title = State()
     waiting_content = State()
     waiting_buttons = State()
+
+class CaptchaState(StatesGroup):
+    waiting_answer = State()
 
 from bs4 import BeautifulSoup as bs
 from faker import Faker
@@ -76,9 +83,10 @@ def load_config(path: str = 'config.yml') -> dict:
     defaults = {
         'token': '',
         'blacklisted': '',
-        'prefix': '/',
+        'prefix': '/!.',
         'owner': 0,
         'antispam': 10,
+        'force_sub_channel': ''
     }
 
     try:
@@ -134,7 +142,13 @@ from aiogram.dispatcher.handler import CancelHandler
 USER_THROTTLE = {} 
 USER_MAIL_COOLDOWN = {} # Anti-Spam Mail (2 Menit)
 THROTTLE_TIME = 1.5 # Detik (Jeda antar pesan)
-FORCE_SUB_CHANNEL = "@azkuraairdrop"
+config = load_config()
+BOT_TOKEN = os.getenv("BOT_TOKEN") or config['token']
+OWNER = os.getenv("OWNER_ID") or config['owner']
+PREFIX = os.getenv("PREFIX") or config['prefix']
+BLACKLISTED = str(os.getenv("BLACKLISTED") or config['blacklisted']).split()
+ANTISPAM = int(os.getenv("ANTISPAM") or config['antispam'])
+FORCE_SUB_CHANNEL = os.getenv("FORCE_SUB_CHANNEL") or config.get('force_sub_channel', '')
 FORCE_SUB_CACHE = {} # Cache status sub selama 5 menit
 
 # AUTO-BAN SYSTEM (Anti-DDoS Application Layer)
@@ -167,6 +181,92 @@ async def refresh_security_cache():
             logging.error(f"Security cache refresh failed: {e}")
         
         await asyncio.sleep(60) # Refresh every 1 minute
+
+# --- CAPTCHA SECURITY SYSTEM ---
+async def initiate_captcha(message: types.Message, state: FSMContext, next_action: dict):
+    """
+    Memulai sesi captcha matematika.
+    next_action: dict berisi {'type': '...', 'payload': ...}
+    """
+    a = random.randint(1, 10)
+    b = random.randint(1, 10)
+    res = a + b
+    
+    await CaptchaState.waiting_answer.set()
+    await state.update_data(captcha_ans=res, next_action=next_action)
+    
+    text = (
+        "🔒 <b>KEAMANAN BOT</b>\n"
+        "Untuk melanjutkan, silakan jawab pertanyaan berikut:\n\n"
+        f"<b>{a} + {b} = ?</b>"
+    )
+    
+    # Jika dipanggil dari CallbackQuery (tombol), kita kirim pesan baru
+    # Jika dipanggil dari Message, kita reply
+    try:
+        if isinstance(message, types.CallbackQuery):
+            await message.message.reply(text)
+        else:
+            await message.reply(text)
+    except:
+        await bot.send_message(message.from_user.id, text)
+
+@dp.message_handler(state=CaptchaState.waiting_answer)
+async def process_captcha_answer(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    correct_ans = data.get('captcha_ans')
+    next_action = data.get('next_action', {})
+    
+    if not message.text.isdigit():
+        return await message.reply("⚠️ Harap kirim jawaban berupa angka.")
+        
+    user_ans = int(message.text)
+    
+    if user_ans != correct_ans:
+        # Salah
+        await state.finish()
+        return await message.reply("❌ <b>Jawaban Salah!</b>\nAkses ditolak. Silakan ulangi dari awal.")
+    
+    # Benar
+    await message.reply("✅ <b>Verifikasi Berhasil!</b> Memproses permintaan...")
+    await state.finish() # Clear captcha state
+    
+    action_type = next_action.get('type')
+    
+    if action_type == 'mail_random':
+        # Replicate /mail command behavior
+        fake_msg = message
+        fake_msg.text = "/mail"
+        await create_random_mail(fake_msg)
+        
+    elif action_type == 'mail_custom':
+        # Replicate custom mail start
+        await MailCustomState.username.set()
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔙 Batal", callback_data="m_mail"))
+        await message.reply(
+            "<b>✍️ CUSTOM TEMP MAIL</b>\n\n"
+            "Silakan masukkan <b>Username</b> yang diinginkan.\n"
+            "<i>(Hanya huruf, angka, titik, dan strip)</i>",
+            reply_markup=kb
+        )
+        
+    elif action_type == 'fake_id':
+        country_code = next_action.get('payload')
+        # Replicate /fake [code] behavior
+        fake_msg = message
+        fake_msg.text = f"/fake {country_code}"
+        await fake_identity(fake_msg)
+        
+    elif action_type == 'note_add':
+        # Replicate note add start
+        await NoteState.title.set()
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔙 Batal", callback_data="note_main"))
+        await message.reply(
+            "<b>➕ BUAT CATATAN BARU</b>\n\nSilakan kirim <b>Judul Catatan</b> yang ingin dibuat.",
+            reply_markup=kb
+        )
 
 class AccessMiddleware(BaseMiddleware):
     """Middleware: Auto-Ban, Rate Limit, Ban, Maintenance, Force Sub."""
@@ -243,6 +343,70 @@ file_handler.setFormatter(formatter)
 logging.getLogger().addHandler(file_handler)
 logging.basicConfig(level=logging.INFO)
 
+# --- MIDDLEWARE: FORCE SUBSCRIBE ---
+from aiogram.dispatcher.handler import CancelHandler
+from aiogram.dispatcher.middlewares import BaseMiddleware
+
+class ForceSubMiddleware(BaseMiddleware):
+    async def on_process_message(self, message: types.Message, data: dict):
+        if not FORCE_SUB_CHANNEL:
+            return
+            
+        user_id = message.from_user.id
+        # Skip check for Owner or Private Chat only? Usually for all chats.
+        # But maybe we want to allow bot to work in groups without forcing everyone?
+        # Let's enforce for private chat interactions mainly.
+        if message.chat.type != 'private':
+            return
+
+        try:
+            member = await bot.get_chat_member(chat_id=FORCE_SUB_CHANNEL, user_id=user_id)
+            if member.status in ['left', 'kicked']:
+                raise ValueError("Not a member")
+        except Exception:
+            # User is not a member or Bot is not admin in channel
+            # Create Invite Link Button
+            invite_link = f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("📢 Join Channel", url=invite_link))
+            # Tambahkan tombol cek lagi? Tidak perlu, user cukup kirim pesan lagi.
+            
+            await message.reply(
+                f"❌ <b>Akses Ditolak!</b>\n\n"
+                f"Anda harus bergabung dengan channel {FORCE_SUB_CHANNEL} terlebih dahulu untuk menggunakan bot ini.\n\n"
+                f"Silakan join lalu kirim pesan ulang.",
+                reply_markup=kb,
+                parse_mode='HTML'
+            )
+            raise CancelHandler() # Stop processing
+
+    async def on_process_callback_query(self, call: types.CallbackQuery, data: dict):
+        if not FORCE_SUB_CHANNEL:
+            return
+            
+        user_id = call.from_user.id
+        try:
+            member = await bot.get_chat_member(chat_id=FORCE_SUB_CHANNEL, user_id=user_id)
+            if member.status in ['left', 'kicked']:
+                raise ValueError("Not a member")
+        except Exception:
+            invite_link = f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"
+            kb = types.InlineKeyboardMarkup()
+            kb.add(types.InlineKeyboardButton("📢 Join Channel", url=invite_link))
+            
+            await call.message.reply(
+                f"❌ <b>Akses Ditolak!</b>\n\n"
+                f"Anda harus bergabung dengan channel {FORCE_SUB_CHANNEL} terlebih dahulu.",
+                reply_markup=kb,
+                parse_mode='HTML'
+            )
+            await call.answer()
+            raise CancelHandler()
+
+# Setup Middleware
+dp.middleware.setup(ForceSubMiddleware())
+
+# --- DATABASE SETUP ---
 import database as db
 
 # DATABASE INTEGRATION (SUPABASE/TiDB - ASYNC WRAPPERS)
@@ -574,9 +738,9 @@ Contoh:
         kb.add(types.InlineKeyboardButton("🔙 Menu Utama", callback_data="m_main"))
         
         await bot.edit_message_text(
-            f"<b>🏦 FAKE IBAN GENERATOR</b>\n"
-            f"Silakan pilih negara asal bank:\n"
-            f"<i>Data diambil dari fakeiban.org (scraped) & Faker.</i>",
+            f"<b>🏦 FAKE IBAN GENERATOR</b>\n\n"
+            f"Gunakan fitur ini untuk membuat data rekening bank (IBAN) internasional yang valid untuk keperluan testing.\n\n"
+            f"<b>Silakan pilih negara asal bank:</b>",
             chat_id=user.id,
             message_id=callback_query.message.message_id,
             reply_markup=kb,
@@ -601,18 +765,19 @@ Contoh:
 ╘═════════'''
         )
     elif code == 'm_main':
-        # Fix: Reply Keyboard must be sent via send_message, not edit_message
+        # Menghapus pesan redundant sesuai permintaan user. 
+        # Agar Reply Keyboard tetap muncul, kita hapus pesan lama dan kirim pesan baru dengan keyboard.
         try:
-            await bot.edit_message_text("✅ <b>Menu utama</b> siap digunakan di keyboard bawah.", chat_id=user.id, message_id=callback_query.message.message_id, parse_mode=types.ParseMode.HTML)
+            await bot.delete_message(chat_id=user.id, message_id=callback_query.message.message_id)
         except: pass
         
         is_adm = await is_owner(user.id)
-        # Important: Send a NEW message to attach the Reply Keyboard
-        await bot.send_message(user.id, "Silakan pilih menu:", reply_markup=get_reply_keyboard(is_adm))
-        
-        # FIX: Send Reply Keyboard separately to ensure it appears
-        is_adm = await is_owner(user.id)
-        await bot.send_message(user.id, "Silakan pilih menu di keyboard bawah.", reply_markup=get_reply_keyboard(is_adm))
+        await bot.send_message(
+            user.id, 
+            "✅ <b>Menu utama</b> siap digunakan di keyboard bawah.", 
+            reply_markup=get_reply_keyboard(is_adm),
+            parse_mode=types.ParseMode.HTML
+        )
 
 
 @dp.message_handler(commands=['start', 'help'], commands_prefix=PREFIX, state="*")
@@ -658,12 +823,9 @@ async def helpstr(message: types.Message, state: FSMContext):
             "Hubungi admin support kami jika menemukan kendala."
         )
         
-        # Inline Keyboard for Help
-        kb_help = types.InlineKeyboardMarkup(row_width=1)
-        kb_help.add(types.InlineKeyboardButton("💬 Hubungi Support", url=f"tg://user?id={OWNER}"))
-        kb_help.add(types.InlineKeyboardButton("🔙 Menu Utama", callback_data="m_main"))
-        
-        await message.answer(help_msg, reply_markup=kb_help, disable_web_page_preview=True)
+        # Kirim bantuan dengan Reply Keyboard (Menu Bawah)
+        is_adm = await is_owner(message.from_user.id)
+        await message.answer(help_msg, reply_markup=get_reply_keyboard(is_adm), disable_web_page_preview=True)
         
     else:
         # --- START MESSAGE ---
@@ -684,58 +846,11 @@ async def helpstr(message: types.Message, state: FSMContext):
             "Pilih salah satu menu di bawah ini untuk memulai."
         )
         
-        # Inline Keyboard for Start
-        kb_start = types.InlineKeyboardMarkup(row_width=2)
-        kb_start.add(
-            types.InlineKeyboardButton("💳 Checker", callback_data="m_chk"),
-            types.InlineKeyboardButton("⚙️ Generator", callback_data="m_gen")
-        )
-        kb_start.add(
-            types.InlineKeyboardButton("📧 Temp Mail", callback_data="m_mail"),
-            types.InlineKeyboardButton("👤 Fake ID", callback_data="m_fake")
-        )
-        kb_start.add(
-            types.InlineKeyboardButton("ℹ️ Info Akun", callback_data="m_info"),
-            types.InlineKeyboardButton("❓ Bantuan", callback_data="m_info") # Pointing to info or maybe we should use a callback for help?
-        )
-        # Fix: The last button "Bantuan" should probably trigger help text, but callback 'm_info' shows user info. 
-        # Let's create a callback for help if it doesn't exist, or just use url to /help? No, callback is better.
-        # Looking at existing callbacks: m_chk, m_gen, m_mail, m_fake, m_info. 
-        # Let's use 'm_main' for "Menu" but for "Bantuan" maybe we can send the help message? 
-        # But wait, the user asked for "Help message".
-        # Let's adjust the button to "❓ Panduan" and link it to a callback that shows help, 
-        # BUT I don't want to create a NEW callback handler if not necessary.
-        # I'll check if I can just use a trick. Or I can add a new callback 'm_help'.
-        # For now, let's link "Bantuan" to "m_main" (Menu) or just remove it if redundant?
-        # Actually, let's just make "Bantuan" trigger the help message via a new callback logic or just assume user types /help.
-        # Better: I'll use a specific callback "m_help" and add it to the callback handler in the next step if needed.
-        # However, to be safe and avoid adding new handlers if I can't, I will link "Bantuan" to "m_chk" (Checker) as a placeholder? No that's bad.
-        # I will use 'm_main' for now as "Menu Utama". 
-        # Re-reading: "start dengan lengkap kasih tombol inline keyboard juga".
-        # I will stick to the plan but maybe change the last button to 'm_iban' since I highlighted it.
-        
-        # REVISION FOR BUTTONS:
-        kb_start = types.InlineKeyboardMarkup(row_width=2)
-        kb_start.add(
-            types.InlineKeyboardButton("💳 Checker", callback_data="m_chk"),
-            types.InlineKeyboardButton("⚙️ Generator", callback_data="m_gen")
-        )
-        kb_start.add(
-            types.InlineKeyboardButton("📧 Temp Mail", callback_data="m_mail"),
-            types.InlineKeyboardButton("👤 Fake ID", callback_data="m_fake")
-        )
-        kb_start.add(
-            types.InlineKeyboardButton("🏦 Fake IBAN", callback_data="m_iban"),
-            types.InlineKeyboardButton("🔍 Cek BIN", callback_data="m_bin")
-        )
-        kb_start.add(types.InlineKeyboardButton("💬 Support", url=f"tg://user?id={OWNER}"))
-
-        await message.answer(start_msg, reply_markup=kb_start, disable_web_page_preview=True)
+        # Kirim start message dengan Reply Keyboard (Menu Bawah)
+        is_adm = await is_owner(message.from_user.id)
+        await message.answer(start_msg, reply_markup=get_reply_keyboard(is_adm), disable_web_page_preview=True)
     
-    # Send Reply Keyboard (Menu Bawah) - Persistent Menu
-    # Memastikan menu bawah muncul kembali (penting jika user hapus chat history)
-    is_adm = await is_owner(message.from_user.id)
-    await message.answer("Silakan pilih menu di keyboard bawah.", reply_markup=get_reply_keyboard(is_adm))
+    return
 
 
 # --- NOTES FEATURE (INLINE INTERFACE) ---
@@ -750,6 +865,7 @@ async def show_notes_menu(chat_id, message_id=None):
     text = (
         "<b>📝 SECURE NOTES</b>\n"
         "Simpan catatan penting Anda dengan aman.\n"
+        "Semua judul dan isi catatan Anda telah <b>dienkripsi secara otomatis</b> di database kami.\n\n"
         "Silakan pilih menu di bawah:"
     )
     
@@ -801,17 +917,9 @@ async def cb_notes_list(call: types.CallbackQuery):
     await call.answer()
 
 @dp.callback_query_handler(text="note_add", state="*")
-async def cb_notes_add(call: types.CallbackQuery):
-    await NoteState.title.set()
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔙 Batal", callback_data="note_main"))
-    
-    await bot.edit_message_text(
-        "<b>➕ BUAT CATATAN BARU</b>\n\nSilakan kirim <b>Judul Catatan</b> yang ingin dibuat.",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=kb
-    )
+async def cb_notes_add(call: types.CallbackQuery, state: FSMContext):
+    await state.finish()
+    await initiate_captcha(call, state, {'type': 'note_add'})
     await call.answer()
 
 @dp.message_handler(state=NoteState.title)
@@ -1952,15 +2060,49 @@ async def process_dynamic_reply_button(message: types.Message, state: FSMContext
     if action == 'admin':
         await admin_panel(message)
     elif action == 'chk':
-        await message.reply("<b>💳 CC Checker</b>\nSilakan kirim kartu dengan format: <code>cc|mm|yy|cvv</code>\nAtau gunakan perintah <code>/chk</code>.", reply_markup=reply_kb)
+        await message.reply(
+            "<b>💳 CC Checker Live</b>\n\n"
+            "Gunakan fitur ini untuk memeriksa status aktif/mati dari kartu kredit/debit secara akurat (Auth/Charge).\n\n"
+            "<b>ℹ️ Cara Penggunaan:</b>\n"
+            "• <b>Format Tunggal:</b>\n"
+            "  <code>/chk cc|mm|yy|cvv</code>\n"
+            "  Contoh: <code>/chk 454141xxxx|05|28|123</code>\n\n"
+            "• <b>Cek Massal (Banyak):</b>\n"
+            "  1. Kirim daftar kartu dalam satu pesan.\n"
+            "  2. <b>Reply (Balas)</b> pesan tersebut.\n"
+            "  3. Ketik perintah <code>/chk</code> pada balasan.\n\n"
+            "<i>⚠️ Gunakan dengan bijak untuk keperluan testing dan edukasi.</i>",
+            reply_markup=reply_kb
+        )
     elif action == 'rnd':
         fake_msg = message
         fake_msg.text = "/rnd"
         await rnd_bin(fake_msg)
     elif action == 'gen':
-        await message.reply("<b>⚙️ VCC Generator</b>\nGunakan perintah <code>/gen BIN</code> (contoh: <code>/gen 454141</code>).", reply_markup=reply_kb)
+        await message.reply(
+            "<b>⚙️ VCC Generator (Luhn Algo)</b>\n\n"
+            "Fitur ini membuat data kartu dummy yang valid secara algoritma (Luhn) untuk keperluan testing form input.\n\n"
+            "<b>ℹ️ Cara Penggunaan:</b>\n"
+            "• <b>Format Dasar:</b>\n"
+            "  <code>/gen &lt;bin&gt;</code>\n"
+            "  Contoh: <code>/gen 454141</code>\n\n"
+            "• <b>Dengan Jumlah Custom (Max 50):</b>\n"
+            "  <code>/gen &lt;bin&gt; &lt;jumlah&gt;</code>\n"
+            "  Contoh: <code>/gen 454141 20</code>\n\n"
+            "<i>💡 Tips: Gunakan BIN yang valid agar hasil generate lebih akurat.</i>",
+            reply_markup=reply_kb
+        )
     elif action == 'bin':
-        await message.reply("<b>🔍 BIN Lookup</b>\nKirim perintah <code>/bin 454141</code> untuk cek.", reply_markup=reply_kb)
+        await message.reply(
+            "<b>🔍 BIN Lookup (Pencarian Info Bank)</b>\n\n"
+            "Gunakan fitur ini untuk mengetahui detail dari nomor BIN (6 digit awal kartu).\n\n"
+            "<b>ℹ️ Cara Penggunaan:</b>\n"
+            "• Kirim perintah: <code>/bin &lt;nomor_bin&gt;</code>\n\n"
+            "<b>📝 Contoh:</b>\n"
+            "<code>/bin 454141</code>\n\n"
+            "<i>Bot akan menampilkan Nama Bank, Negara, Tipe, dan Level kartu.</i>",
+            reply_markup=reply_kb
+        )
     elif action == 'mail':
         await show_mail_menu(message.from_user.id, message=message)
     elif action == 'mail_inbox':
@@ -2947,42 +3089,23 @@ async def login_mail(message: types.Message):
         await message.reply("⚠️ <b>Login gagal!</b> Email atau password salah, atau akun sudah dihapus oleh server.")
 
 @dp.callback_query_handler(lambda c: c.data.startswith('fake_'))
-async def fake_country_callback(callback_query: types.CallbackQuery):
+async def fake_country_callback(callback_query: types.CallbackQuery, state: FSMContext):
     await bot.answer_callback_query(callback_query.id)
     country_code = callback_query.data.split('_')[1]
     
-    # Trigger fake_identity logic
-    fake_msg = callback_query.message
-    fake_msg.from_user = callback_query.from_user
-    fake_msg.text = f"/fake {country_code}"
-    
-    await fake_identity(fake_msg)
+    await state.finish()
+    await initiate_captcha(callback_query, state, {'type': 'fake_id', 'payload': country_code})
 
 @dp.callback_query_handler(lambda c: c.data == 'm_mail_create')
-async def create_mail_callback(callback_query: types.CallbackQuery):
+async def create_mail_callback(callback_query: types.CallbackQuery, state: FSMContext):
     await bot.answer_callback_query(callback_query.id)
-    # Trigger gen_mail logic
-    fake_msg = callback_query.message
-    fake_msg.from_user = callback_query.from_user
-    fake_msg.text = "/mail" # Reset args
-    await create_random_mail(fake_msg)
+    await state.finish()
+    await initiate_captcha(callback_query, state, {'type': 'mail_random'})
 
 @dp.callback_query_handler(lambda c: c.data == 'm_mail_custom', state="*")
 async def custom_mail_callback(callback_query: types.CallbackQuery, state: FSMContext):
     await state.finish() # Reset any previous state
-    await MailCustomState.username.set()
-    
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔙 Batal", callback_data="m_mail"))
-    
-    await bot.edit_message_text(
-        "<b>✍️ CUSTOM TEMP MAIL</b>\n\n"
-        "Silakan masukkan <b>Username</b> yang diinginkan.\n"
-        "<i>(Hanya huruf, angka, titik, dan strip)</i>",
-        callback_query.from_user.id,
-        callback_query.message.message_id,
-        reply_markup=kb
-    )
+    await initiate_captcha(callback_query, state, {'type': 'mail_custom'})
     await callback_query.answer()
 
 @dp.message_handler(state=MailCustomState.username)
@@ -3083,16 +3206,65 @@ async def execute_custom_mail(message: types.Message, state: FSMContext, passwor
 @dp.callback_query_handler(lambda c: c.data == 'm_mail_login')
 async def login_mail_menu_callback(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
+    await MailLoginState.waiting_for_email.set()
     await bot.send_message(
         callback_query.from_user.id,
-        f"<b>🔑 LOGIN TEMP MAIL</b>\n"
-        f"Akses kembali inbox email lama Anda.\n\n"
-        f"<b>Format Perintah:</b>\n"
-        f"<code>{PREFIX}login [email] [password]</code>\n\n"
-        f"<b>Contoh:</b>\n"
-        f"<code>{PREFIX}login budi@kuearas.com a1b2c3d4</code>\n\n"
-        f"<i>Catatan: Hanya bisa login jika akun belum dihapus dari server.</i>"
+        "<b>🔑 LOGIN TEMP MAIL</b>\n\n"
+        "Silakan kirimkan <b>Alamat Email</b> yang ingin Anda gunakan login.\n"
+        "<i>(Ketik /cancel untuk membatalkan)</i>"
     )
+
+@dp.message_handler(state=MailLoginState.waiting_for_email)
+async def process_login_email(message: types.Message, state: FSMContext):
+    email = message.text.strip()
+    if '@' not in email:
+        return await message.reply("⚠️ <b>Format Email Salah.</b>\nPastikan ada tanda '@'. Silakan kirim ulang.")
+    
+    await state.update_data(login_email=email)
+    await MailLoginState.waiting_for_password.set()
+    await message.reply(
+        "✅ Email diterima.\n\n"
+        "Sekarang, silakan kirimkan <b>Password</b> untuk email tersebut."
+    )
+
+@dp.message_handler(state=MailLoginState.waiting_for_password)
+async def process_login_password(message: types.Message, state: FSMContext):
+    password = message.text.strip()
+    user_data = await state.get_data()
+    email = user_data.get('login_email')
+    
+    await state.finish()
+    await message.reply("⏳ <b>Sedang mencoba login...</b>")
+    
+    # Logic Login (Menggunakan get_mail_token)
+    token = await get_mail_token(email, password)
+    
+    if token:
+        # Jika berhasil login, simpan session
+        await db.db_save_mail_session(message.from_user.id, email, password, token)
+        
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("📥 Cek Inbox", callback_data="refresh_mail"))
+        kb.add(types.InlineKeyboardButton("🔙 Menu Utama", callback_data="m_mail"))
+        
+        await message.reply(
+            f"✅ <b>LOGIN BERHASIL!</b>\n\n"
+            f"📧 <b>Email:</b> <code>{email}</code>\n"
+            f"🔑 <b>Status:</b> Aktif\n\n"
+            f"Sekarang Anda bisa menerima pesan masuk.",
+            reply_markup=kb
+        )
+    else:
+        # Gagal Login
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔄 Coba Lagi", callback_data="m_mail_login"))
+        
+        await message.reply(
+            "❌ <b>LOGIN GAGAL!</b>\n\n"
+            "Email atau Password salah, atau akun sudah dihapus dari server.\n"
+            "Silakan coba lagi atau buat akun baru.",
+            reply_markup=kb
+        )
 
 @dp.callback_query_handler(lambda c: c.data.startswith('m_mail_list'))
 async def list_emails_callback(callback_query: types.CallbackQuery):
@@ -3364,15 +3536,24 @@ async def read_mail_callback(callback_query: types.CallbackQuery):
     
     # Prefer HTML if available (stripped), else Text
     body = msg.get('text') or "No content"
+    
+    # Simple cleaner untuk menghilangkan artifact seperti [image...]
+    def clean_html_text(text):
+        import re
+        # Hapus pattern [link/image] yang sering muncul dari parser
+        text = re.sub(r'\[https?://[^\]]+\]', '', text)
+        return text.strip()
+
+    body = clean_html_text(body)
     if len(body) > 3500: body = body[:3500] + "... (truncated)"
     
     text_out = (
         f"<b>📨 PESAN MASUK</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Dari:</b> {sender}\n"
-        f"<b>Subjek:</b> {subject}\n"
-        f"<b>Tanggal:</b> {date_str}\n"
-        f"━━━━━━━━━━━━━━━━━━\n\n"
+        f"═════════════════\n"
+        f"👤 <b>Dari:</b> <code>{sender}</code>\n"
+        f"📌 <b>Subjek:</b> {subject}\n"
+        f"📅 <b>Waktu:</b> {date_str}\n"
+        f"═════════════════\n\n"
         f"{body}"
     )
     
@@ -3460,16 +3641,21 @@ async def fake_identity(message: types.Message):
         
         OUTPUT = identity.format_identity_message(data, first_name_user, user_id)
         
-        # Keyboard Setup
+        # Keyboard Setup (Compact & Aesthetic)
         kb = types.InlineKeyboardMarkup(row_width=2)
         
-        # Mail Buttons (Only if token exists)
+        # Row 1: Mail Actions (If available)
         if token:
-            kb.add(types.InlineKeyboardButton("📩 Check Inbox", callback_data="refresh_mail"))
-            kb.add(types.InlineKeyboardButton("🔄 Switch Account", callback_data="m_mail_list"))
+            kb.row(
+                types.InlineKeyboardButton("📩 Inbox", callback_data="refresh_mail"),
+                types.InlineKeyboardButton("🔄 Switch", callback_data="m_mail_list")
+            )
         
-        # Save Button (Always Available)
-        kb.add(types.InlineKeyboardButton("💾 Simpan ke Catatan", callback_data="save_fake_id"))
+        # Row 2: Save & Back
+        kb.row(
+            types.InlineKeyboardButton("💾 Simpan", callback_data="save_fake_id"),
+            types.InlineKeyboardButton("🔙 Ganti Negara", callback_data="m_fake")
+        )
             
         await message.reply(OUTPUT, reply_markup=kb, disable_web_page_preview=True)
 
@@ -3558,17 +3744,43 @@ async def process_iban_gen(callback_query: types.CallbackQuery):
 @dp.message_handler(commands=['iban'], commands_prefix=PREFIX)
 async def cmd_iban(message: types.Message):
     args = message.get_args()
+    
+    # Jika tidak ada argumen, tampilkan menu pilihan negara (Inline)
     if not args:
-        return await message.reply(f"⚠️ Format: <code>{PREFIX}iban [kode_negara]</code>\nContoh: <code>{PREFIX}iban de</code>")
+        kb = types.InlineKeyboardMarkup(row_width=3)
+        countries = list(iban.FAKEIBAN_COUNTRIES.items())
+        
+        btns = []
+        for c_code, c_name in countries:
+             flag_offset = 127397
+             try:
+                flag = chr(ord(c_code[0].upper()) + flag_offset) + chr(ord(c_code[1].upper()) + flag_offset)
+             except: flag = "🏳️"
+             label = f"{flag} {c_code.upper()}"
+             btns.append(types.InlineKeyboardButton(label, callback_data=f"iban_gen_{c_code}"))
+        
+        kb.add(*btns)
+        
+        return await message.reply(
+            "<b>🏦 FAKE IBAN GENERATOR</b>\n\n"
+            "Silakan pilih negara asal bank di bawah ini untuk men-generate data IBAN secara otomatis:",
+            reply_markup=kb,
+            parse_mode=types.ParseMode.HTML
+        )
         
     country_code = args.split()[0].lower()
     if country_code not in iban.FAKEIBAN_COUNTRIES:
          return await message.reply("⚠️ Kode negara tidak didukung atau tidak valid.")
          
-    msg = await message.reply("⏳ <i>Generating...</i>")
+    # Loading Effect
+    msg = await message.reply("⏳ <b>Sedang generate IBAN...</b>\n<i>Mohon tunggu sebentar...</i>")
     
-    # Run in executor
+    # Run in executor (Scraping might take a few seconds)
     iban_res = await loop.run_in_executor(None, iban.get_fake_iban, country_code)
+    
+    if not iban_res:
+        return await msg.edit_text("❌ <b>Gagal Generate IBAN.</b>\nLayanan sedang sibuk atau gangguan jaringan. Silakan coba lagi nanti.")
+
     country_name = iban.get_country_name(country_code)
     
     res_text = (
@@ -3581,6 +3793,7 @@ async def cmd_iban(message: types.Message):
     
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔄 Generate Lagi", callback_data=f"iban_gen_{country_code}"))
+    kb.add(types.InlineKeyboardButton("🔙 Menu Negara", callback_data="m_iban"))
     
     await msg.edit_text(res_text, reply_markup=kb, parse_mode=types.ParseMode.HTML)
 
@@ -3605,6 +3818,7 @@ async def set_default_commands(dp):
 
 async def auto_check_mail():
     """Adaptive Polling for Temp Mail (Batch + Backoff)."""
+    logging.info("🚀 Background Mail Checker Started...")
     while True:
         try:
             # 1. Fetch sessions due for check (Batch of 50)
@@ -3620,8 +3834,8 @@ async def auto_check_mail():
             # Run batch concurrently
             await asyncio.gather(*tasks)
             
-            # Avoid tight loop if processing is super fast
-            await asyncio.sleep(10)
+            # Avoid tight loop
+            await asyncio.sleep(5)
             
         except Exception as e:
             logging.error(f"Auto check mail error: {e}")
@@ -3633,19 +3847,25 @@ async def check_single_mail(data):
     last_id = data.get('last_msg_id')
     
     try:
-        msgs = await asyncio.to_thread(get_mail_messages, token)
+        # get_mail_messages is already async defined above
+        msgs = await get_mail_messages(token)
+        
+        # Update check time regardless of result (to prevent stuck loops)
+        # Next check in 60 seconds (adaptive)
+        next_ts = time.time() + 60
         
         # Scenario 1: New Message Found
         if msgs and len(msgs) > 0:
             newest_msg = msgs[0]
             newest_id = newest_msg.get('id')
             
-            if newest_id != last_id:
-                await db.db_update_mail_last_id(user_id, newest_id)
-                
-                # Send Notification
+            # If DB last_id is empty, set it to newest without notifying (first sync)
+            # OR if different, notify.
+            if last_id and newest_id != last_id:
+                # Notify User
                 sender = newest_msg.get('from', {}).get('address', 'Unknown')
                 subject = newest_msg.get('subject', 'No Subject')
+                
                 kb = types.InlineKeyboardMarkup()
                 kb.add(types.InlineKeyboardButton("📖 Baca Pesan", callback_data=f"read_{newest_id}"))
                 
@@ -3653,19 +3873,25 @@ async def check_single_mail(data):
                     await bot.send_message(
                         user_id,
                         f"<b>🔔 EMAIL BARU MASUK!</b>\n"
-                        f"━━━━━━━━━━━━━━━━━━\n"
-                        f"<b>Dari:</b> {sender}\n"
-                        f"<b>Subjek:</b> {subject}",
+                        f"═════════════════\n"
+                        f"👤 <b>Dari:</b> <code>{sender}</code>\n"
+                        f"📌 <b>Subjek:</b> {subject}\n",
                         reply_markup=kb
                     )
                 except Exception as e:
-                    if "bot was blocked" in str(e):
+                    if "bot was blocked" in str(e).lower():
                         await db.db_delete_mail_session(user_id)
-                return
+            
+            # Update last_id & timestamp
+            await db.db_update_mail_check_time(user_id, next_ts, newest_id)
+        else:
+            # No message, just update timestamp
+            await db.db_update_mail_check_time(user_id, next_ts)
         
-    except Exception:
+    except Exception as e:
         # Error (Token invalid?): ignore and try again in next cycle
-        return
+        # logging.error(f"Check mail failed for {user_id}: {e}")
+        pass
 
 async def on_startup(dp):
     await db.init_db()

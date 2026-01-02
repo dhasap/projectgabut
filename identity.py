@@ -161,13 +161,14 @@ def generate_identity(country_code):
     gender_code = random.choice(['m', 'f'])
     gender = "Male ♂️" if gender_code == 'm' else "Female ♀️"
     
-    # Name & DOB
-    # Priority 1: Check Custom DB (includes ID fix, and romanized names for JP, CN, etc)
+    # Name Logic
+    # Priority 1: ALWAYS use Custom DB for names (clean Latin characters)
+    # Only fallback to Faker if country not in DB (unlikely for supported list)
     custom_name = names_db.get_romanized_name(country_code)
     if custom_name:
         name = custom_name
     else:
-        # Fallback to Faker
+        # Fallback to Faker (Only for unsupported countries)
         try: name = fake_loc.name_male() if gender_code == 'm' else fake_loc.name_female()
         except: name = fake_loc.name()
 
@@ -175,61 +176,51 @@ def generate_identity(country_code):
     dob = dob_date.strftime("%d/%m/%Y")
     age = datetime.today().year - dob_date.year - ((datetime.today().month, datetime.today().day) < (dob_date.month, dob_date.day))
 
-    # Job Logic
-    # Priority 1: Check Custom Job DB (Now available for ALL supported countries)
-    custom_job = names_db.get_custom_job(country_code)
-    if custom_job:
+    # Job & Company Logic (Paired)
+    # Priority 1: ALWAYS use Custom DB for logical pairing
+    custom_job, custom_comp = names_db.get_custom_occupation(country_code)
+    
+    if custom_job and custom_comp:
         job = custom_job
-    else:
-        # Fallback
-        try: job = fake_loc.job()
-        except: job = fake_en.job()
-
-    # Company Logic
-    # Priority 1: Check Custom Company DB
-    custom_comp = names_db.get_custom_company(country_code)
-    if custom_comp:
         company = custom_comp
     else:
-        # Fallback
-        try: company = fake_loc.company()
-        except: company = fake_en.company()
+        # Fallback to Faker (Unlikely if country supported)
+        try: 
+            job = fake_loc.job()
+            company = fake_loc.company()
+        except: 
+            job = fake_en.job()
+            company = fake_en.company()
 
     # Location & Phone Logic
     state, city, district, address, postcode, phone, ssn = "", "", "", "", "", "", ""
     
-    # LOGIC: Use Faker if NO error (manual_fallback is False). If Error, use Manual DB.
+    # LOGIC: ALWAYS try Manual DB first for Location consistency & Latin chars
+    # Only use Faker if country is not in our Manual DB
     
+    custom_loc = names_db.get_custom_location(country_code)
     loc_generated = False
-    
-    if not manual_fallback:
+
+    if custom_loc:
+        state = custom_loc['state']
+        city = custom_loc['city']
+        postcode = custom_loc['zip']
+        address = custom_loc['address']
+        district = city
+        loc_generated = True
+    else:
+        # Fallback to Faker (Only for countries NOT in names_db)
         try:
-            # Try generating using Faker
             state = fake_loc.state() if hasattr(fake_loc, 'state') else ""
             city = fake_loc.city()
             address = fake_loc.street_address()
             postcode = fake_loc.postcode()
-            
-            # Simple district fallback
             district = city 
-            
             loc_generated = True
         except:
-            # If Faker methods fail, trigger manual fallback
-            manual_fallback = True
-            
-    if manual_fallback:
-        # Use Manual DB from names_db
-        custom_loc = names_db.get_custom_location(country_code)
-        if custom_loc:
-            state = custom_loc['state']
-            city = custom_loc['city']
-            postcode = custom_loc['zip']
-            address = custom_loc['address']
-            district = city
-            loc_generated = True
+            pass
 
-    # Legacy Fallback (If both Faker and Manual failed or Country not in Manual DB)
+    # Legacy Fallback (If both Manual and Faker failed - Unlikely)
     if not loc_generated and country_code in COUNTRY_DATA:
          c_states = COUNTRY_DATA[country_code]
          state = random.choice(list(c_states.keys()))

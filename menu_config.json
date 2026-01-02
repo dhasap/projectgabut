@@ -37,7 +37,7 @@
       "type": "action"
     },
     {
-      "label": "📝 Catatan",
+      "label": "📝 Secure Notes",
       "action": "note",
       "row": 3,
       "type": "action"

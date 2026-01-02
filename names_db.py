@@ -1,7 +1,8 @@
 import random
 
-# DATABASE MANUAL LENGKAP (NAMA, PEKERJAAN, PERUSAHAAN, LOKASI)
+# DATABASE MANUAL LENGKAP (NAMA, PEKERJAAN + PERUSAHAAN, LOKASI)
 # Format: Latin Characters Only.
+# Updated: Jobs & Companies are now paired logically in 'occupations'.
 
 NAMES_DB = {
     # ==========================================
@@ -29,19 +30,31 @@ NAMES_DB = {
             "Safitri", "Sahputra", "Saleh", "Salim", "Santoso", "Saputra", "Sari", "Setiawan", "Setiyono", "Siregar", "Sitepu", "Sitorus", "Subagyo", "Suharto", "Sulistyo", "Sumantri", "Supriyadi", "Susanto", "Susilo", "Sutrisno", "Syahputra", 
             "Tan", "Tanjung", "Utama", "Utami", "Wahyudi", "Wardana", "Wibowo", "Wibisono", "Widodo", "Wijaya", "Winarto", "Wirawan", "Yuliana", "Yusuf", "Zakaria", "Zulkarnain"
         ],
-        'jobs': [
-            "Karyawan Swasta", "Pegawai Negeri Sipil (PNS)", "Wiraswasta", "Pedagang", "Mahasiswa", "Pelajar", "Guru", "Dosen", 
-            "Dokter Umum", "Perawat", "Bidan", "Apoteker", "Supir", "Driver Ojek Online", "Satpam", "Buruh Pabrik", "Petani", "Nelayan", 
-            "Tukang Masak (Koki)", "Pelayan Restoran", "Kasir", "Resepsionis", "Customer Service", "Sales Marketing", "Akuntan", 
-            "Staff Administrasi", "Teknisi Komputer", "Programmer", "Desainer Grafis", "Penulis", "Content Creator", "Fotografer", 
-            "Mekanik Bengkel", "Tukang Kayu", "Tukang Listrik", "Kuli Bangunan", "Asisten Rumah Tangga", "Ibu Rumah Tangga", "Pensiunan", 
-            "TNI / POLRI", "Pengacara", "Notaris", "Konsultan Bisnis", "Manajer Toko", "Kurir Ekspedisi"
-        ],
-        'companies': [
-            "PT Sinar Mas Group", "PT Telkom Indonesia", "PT Pertamina", "PT Gudang Garam Tbk", "PT Bank Central Asia", "PT Astra International", 
-            "CV Maju Jaya", "CV Berkah Abadi", "UD Sumber Rejeki", "PT Indofood Sukses Makmur", "PT Unilever Indonesia", "PT Gojek Indonesia", 
-            "PT Tokopedia", "PT Bukalapak", "PT Shopee International", "PT Mayora Indah", "PT Kalbe Farma", "PT Adaro Energy", "PT United Tractors",
-            "Toko Kelontong Berkah", "Warung Makan Sederhana", "Bengkel Motor Jaya", "Klinik Sehat Sentosa", "Apotek K-24", "Indomaret", "Alfamart"
+        'occupations': [
+            {"job": "Kasir", "company": "Indomaret"},
+            {"job": "Pramuniaga", "company": "Alfamart"},
+            {"job": "Driver", "company": "Gojek Indonesia"},
+            {"job": "Driver", "company": "Grab Indonesia"},
+            {"job": "Kurir", "company": "JNE Express"},
+            {"job": "Kurir", "company": "J&T Express"},
+            {"job": "Staff Administrasi", "company": "PT Telkom Indonesia"},
+            {"job": "Customer Service", "company": "PT Bank Central Asia (BCA)"},
+            {"job": "Teller", "company": "Bank Rakyat Indonesia (BRI)"},
+            {"job": "Security", "company": "PT Sinar Mas Group"},
+            {"job": "Operator Produksi", "company": "PT Gudang Garam Tbk"},
+            {"job": "Buruh Pabrik", "company": "PT Unilever Indonesia"},
+            {"job": "Sales Marketing", "company": "PT Astra International"},
+            {"job": "Mekanik", "company": "Auto2000"},
+            {"job": "Dokter Umum", "company": "RS Siloam Hospitals"},
+            {"job": "Perawat", "company": "RS Cipto Mangunkusumo"},
+            {"job": "Apoteker", "company": "Apotek K-24"},
+            {"job": "Barista", "company": "Kopi Kenangan"},
+            {"job": "Chef", "company": "Warung Makan Sederhana"},
+            {"job": "Guru", "company": "SD Negeri 01 Pagi"},
+            {"job": "Dosen", "company": "Universitas Indonesia"},
+            {"job": "Software Engineer", "company": "Tokopedia"},
+            {"job": "Data Analyst", "company": "Traveloka"},
+            {"job": "Content Creator", "company": "Shopee Indonesia"}
         ],
         'locations': [
             {"state": "DKI Jakarta", "city": "Jakarta Selatan", "zip": "12", "streets": ["Jl. Sudirman", "Jl. Fatmawati", "Jl. Antasari", "Jl. Kemang Raya", "Jl. Radio Dalam"]},
@@ -62,13 +75,22 @@ NAMES_DB = {
             "bin Abdullah", "bin Ismail", "bin Ibrahim", "bin Rosli", "bin Zakaria", "bin Othman", "bin Rahman", "bin Mat", "binti Ali", "binti Osman", "binti Yusof", "binti Razak",
             "Lee", "Tan", "Wong", "Lim", "Ng", "Teoh", "Yap", "Fong", "Lau", "Chong", "Chin", "Rao", "Nair", "Subramaniam", "Menon", "Krishnan", "Govind"
         ],
-        'jobs': [
-            "Software Engineer", "Civil Engineer", "Accountant", "Teacher", "Lecturer", "Doctor", "Nurse", "Pharmacist", "Sales Executive", "Marketing Manager", "Business Analyst",
-            "Human Resources Executive", "Graphic Designer", "Technician", "Mechanic", "Driver", "Grab Driver", "Security Guard", "Factory Worker", "Chef", "Waiter", "Student", "Freelancer"
-        ],
-        'companies': [
-            "Petronas", "Maybank", "CIMB Group", "Public Bank", "Tenaga Nasional Berhad", "Sime Darby", "Axiata Group", "Maxis", "Digi", "Celcom", "AirAsia", "Genting Group",
-            "IOI Corporation", "Sunway Group", "YTL Corporation", "Top Glove", "Hartalega", "Hong Leong Bank", "RHB Bank", "AmBank"
+        'occupations': [
+            {"job": "Petroleum Engineer", "company": "Petronas"},
+            {"job": "Bank Teller", "company": "Maybank"},
+            {"job": "Customer Service", "company": "CIMB Bank"},
+            {"job": "Technician", "company": "Tenaga Nasional Berhad"},
+            {"job": "Sales Executive", "company": "Proton Holdings"},
+            {"job": "Flight Attendant", "company": "AirAsia"},
+            {"job": "Software Developer", "company": "Grab Malaysia"},
+            {"job": "Accountant", "company": "Public Bank"},
+            {"job": "Plantation Worker", "company": "Sime Darby"},
+            {"job": "Network Engineer", "company": "Maxis"},
+            {"job": "Store Manager", "company": "99 Speedmart"},
+            {"job": "Pharmacist", "company": "Watsons Malaysia"},
+            {"job": "Lecturer", "company": "Universiti Malaya"},
+            {"job": "Doctor", "company": "Gleneagles Hospital"},
+            {"job": "Security Guard", "company": "Top Glove"}
         ],
         'locations': [
             {"state": "Selangor", "city": "Shah Alam", "zip": "40", "streets": ["Jalan Plumbum", "Jalan Kristal", "Persiaran Tasik", "Jalan Sementa"]},
@@ -86,13 +108,19 @@ NAMES_DB = {
         'last': [
             "Tan", "Lee", "Lim", "Ng", "Ong", "Wong", "Goh", "Chua", "Teo", "Koh", "Yeo", "Tay", "Ho", "Low", "bin Ahmad", "bin Yusof", "Singh", "Pillay", "Jayakumar"
         ],
-        'jobs': [
-            "Financial Analyst", "Data Scientist", "Software Developer", "Project Manager", "Operations Manager", "Accountant", "Auditor", "Marketing Executive", "Sales Manager",
-            "Teacher", "Nurse", "Doctor", "Civil Servant", "Engineer", "Architect", "Consultant", "Research Analyst", "Banker", "Trader", "HR Manager"
-        ],
-        'companies': [
-            "DBS Bank", "OCBC Bank", "UOB", "Singtel", "Singapore Airlines", "CapitaLand", "Keppel Corporation", "Wilmar International", "Sembcorp", "ST Engineering",
-            "ComfortDelGro", "SATS", "Venture Corporation", "Genting Singapore", "City Developments Limited", "Jardine Cycle & Carriage", "Sea Limited", "Grab", "Razer"
+        'occupations': [
+            {"job": "Financial Analyst", "company": "DBS Bank"},
+            {"job": "Investment Banker", "company": "OCBC Bank"},
+            {"job": "Software Engineer", "company": "Shopee Singapore"},
+            {"job": "Data Scientist", "company": "Grab"},
+            {"job": "Cabin Crew", "company": "Singapore Airlines"},
+            {"job": "Civil Servant", "company": "Ministry of Education"},
+            {"job": "Nurse", "company": "Singapore General Hospital"},
+            {"job": "Retail Manager", "company": "FairPrice"},
+            {"job": "Operations Manager", "company": "Changi Airport Group"},
+            {"job": "Network Engineer", "company": "Singtel"},
+            {"job": "Real Estate Agent", "company": "PropNex"},
+            {"job": "Bus Captain", "company": "SBS Transit"}
         ],
         'locations': [
             {"state": "Singapore", "city": "Singapore", "zip": "04", "streets": ["Raffles Place", "Cecil Street", "Robinson Road", "Shenton Way"]},
@@ -109,13 +137,19 @@ NAMES_DB = {
         'last': [
             "Santos", "Reyes", "Cruz", "Bautista", "Ocampo", "Garcia", "Mendoza", "Torres", "Flores", "Dela Cruz", "Gonzales", "Rivera", "Castillo", "Villanueva", "Ramos", "Vargas", "Fernandez", "Aquino", "Mercado"
         ],
-        'jobs': [
-            "Call Center Agent", "Virtual Assistant", "Nurse", "Engineer", "Teacher", "Accountant", "IT Specialist", "Sales Representative", "Customer Service Representative",
-            "Administrative Assistant", "Driver", "Security Guard", "Construction Worker", "Farmer", "Fisherman", "Domestic Helper", "Online Seller", "Freelancer"
-        ],
-        'companies': [
-            "SM Investments", "Ayala Corporation", "BDO Unibank", "JG Summit Holdings", "PLDT", "Globe Telecom", "Jollibee Foods Corp", "San Miguel Corporation",
-            "Metrobank", "Bank of the Philippine Islands", "Meralco", "Aboitiz Equity Ventures", "International Container Terminal Services", "Megaworld", "Robinsons Land"
+        'occupations': [
+            {"job": "Call Center Agent", "company": "Concentrix"},
+            {"job": "Virtual Assistant", "company": "Upwork"},
+            {"job": "Bank Teller", "company": "BDO Unibank"},
+            {"job": "Sales Associate", "company": "SM Supermalls"},
+            {"job": "Nurse", "company": "St. Luke's Medical Center"},
+            {"job": "Civil Engineer", "company": "DMCI Holdings"},
+            {"job": "Fast Food Crew", "company": "Jollibee"},
+            {"job": "Flight Attendant", "company": "Philippine Airlines"},
+            {"job": "IT Specialist", "company": "Globe Telecom"},
+            {"job": "Accountant", "company": "Ayala Corporation"},
+            {"job": "Teacher", "company": "DepEd"},
+            {"job": "Security Guard", "company": "San Miguel Corporation"}
         ],
         'locations': [
             {"state": "Metro Manila", "city": "Makati", "zip": "12", "streets": ["Ayala Avenue", "Gil Puyat Avenue", "Makati Avenue", "Chino Roces"]},
@@ -134,13 +168,18 @@ NAMES_DB = {
             "Saunkham", "Khamdee", "Srithong", "Wongwai", "Srisuk", "Chaichana", "Saelim", "Sukhum", "Charoen",
             "Saeli", "Saetang", "Phonpraseut", "Bunrueang", "Thongdee", "Kaewmanee", "Suwannarat", "Ratanaporn"
         ],
-        'jobs': [
-            "Office Worker", "Teacher", "Government Officer", "Merchant", "Farmer", "Doctor", "Nurse", "Engineer", "Hotel Staff", "Tour Guide", "Driver", "Factory Worker",
-            "Freelancer", "Business Owner", "Chef", "Monk", "Student", "Police Officer"
-        ],
-        'companies': [
-            "PTT Public Company", "Siam Cement Group", "CP All", "Advanced Info Service", "Airports of Thailand", "Kasikornbank", "Bangkok Bank", "Siam Commercial Bank",
-            "Charoen Pokphand Foods", "Thai Beverage", "Central Pattana", "True Corporation", "Minor International", "Indorama Ventures"
+        'occupations': [
+            {"job": "Store Manager", "company": "7-Eleven Thailand"},
+            {"job": "Bank Clerk", "company": "Kasikornbank"},
+            {"job": "Office Worker", "company": "PTT Public Company"},
+            {"job": "Engineer", "company": "Siam Cement Group"},
+            {"job": "Hotel Receptionist", "company": "Centara Hotels"},
+            {"job": "Chef", "company": "MK Restaurants"},
+            {"job": "Sales Representative", "company": "Toyota Thailand"},
+            {"job": "Nurse", "company": "Bumrungrad Hospital"},
+            {"job": "Government Officer", "company": "Bangkok Metropolitan Admin"},
+            {"job": "Brewery Worker", "company": "Thai Beverage"},
+            {"job": "Telecom Engineer", "company": "AIS Thailand"}
         ],
         'locations': [
             {"state": "Bangkok", "city": "Bangkok", "zip": "10", "streets": ["Sukhumvit Road", "Silom Road", "Sathorn Road", "Rama IV Road", "Phetchaburi Road"]},
@@ -157,13 +196,17 @@ NAMES_DB = {
         'last': [
             "Nguyen", "Tran", "Le", "Pham", "Hoang", "Huynh", "Phan", "Vu", "Vo", "Dang", "Bui", "Do", "Ho", "Ngo", "Duong"
         ],
-        'jobs': [
-            "Software Engineer", "Teacher", "Accountant", "Office Staff", "Worker", "Farmer", "Driver", "Salesperson", "Doctor", "Nurse", "Translator", "Tour Guide",
-            "Shop Owner", "Freelancer", "Student", "Construction Worker", "Security Guard"
-        ],
-        'companies': [
-            "Vingroup", "Vinamilk", "Vietcombank", "Hoa Phat Group", "Masan Group", "PetroVietnam", "Viettel", "FPT Corporation", "Vietnam Airlines",
-            "Techcombank", "VPBank", "BIDV", "Novaland", "Mobile World Investment", "Sabeco"
+        'occupations': [
+            {"job": "Software Engineer", "company": "FPT Software"},
+            {"job": "Real Estate Agent", "company": "Vingroup"},
+            {"job": "Dairy Worker", "company": "Vinamilk"},
+            {"job": "Bank Teller", "company": "Vietcombank"},
+            {"job": "Teacher", "company": "Vinschool"},
+            {"job": "Sales Manager", "company": "Masan Group"},
+            {"job": "Pilot", "company": "Vietnam Airlines"},
+            {"job": "Network Engineer", "company": "Viettel"},
+            {"job": "Factory Supervisor", "company": "Samsung Vietnam"},
+            {"job": "Barista", "company": "Highlands Coffee"}
         ],
         'locations': [
             {"state": "Ho Chi Minh City", "city": "Ho Chi Minh City", "zip": "70", "streets": ["Nguyen Hue", "Le Loi", "Dong Khoi", "Pasteur", "Hai Ba Trung"]},
@@ -185,13 +228,17 @@ NAMES_DB = {
             "Sato", "Suzuki", "Takahashi", "Tanaka", "Watanabe", "Ito", "Yamamoto", "Nakamura", "Kobayashi", "Kato",
             "Yoshida", "Yamada", "Sasaki", "Yamaguchi", "Matsumoto", "Inoue", "Kimura", "Shimizu", "Hayashi"
         ],
-        'jobs': [
-            "Salaryman", "Office Lady", "Software Engineer", "Teacher", "Civil Servant", "Nurse", "Caregiver", "Sales Representative", "Factory Worker", "Researcher",
-            "Designer", "Artist", "Musician", "Student", "Part-time Worker", "Convenience Store Staff", "Driver"
-        ],
-        'companies': [
-            "Toyota Motor Corp", "Sony Group", "Nintendo Co Ltd", "SoftBank Group", "Honda Motor Co", "Mitsubishi UFJ Financial", "Sumitomo Mitsui", "Hitachi Ltd",
-            "Panasonic Corp", "Fast Retailing (Uniqlo)", "Seven & i Holdings", "KDDI Corp", "Japan Tobacco", "Canon Inc", "Bridgestone Corp"
+        'occupations': [
+            {"job": "Automotive Engineer", "company": "Toyota Motor Corp"},
+            {"job": "Game Designer", "company": "Nintendo"},
+            {"job": "Electronics Technician", "company": "Sony Group"},
+            {"job": "Salesman", "company": "Uniqlo"},
+            {"job": "Banker", "company": "Mitsubishi UFJ"},
+            {"job": "Store Staff", "company": "7-Eleven Japan"},
+            {"job": "Research Scientist", "company": "Takeda Pharmaceutical"},
+            {"job": "Salaryman", "company": "SoftBank Group"},
+            {"job": "Animator", "company": "Studio Ghibli"},
+            {"job": "Train Driver", "company": "JR East"}
         ],
         'locations': [
             {"state": "Tokyo", "city": "Shinjuku", "zip": "16", "streets": ["Yasukuni Dori", "Meiji Dori", "Koshu Kaido"]},
@@ -209,13 +256,17 @@ NAMES_DB = {
         'last': [
             "Kim", "Lee", "Park", "Choi", "Jung", "Kang", "Jo", "Yoon", "Jang", "Lim", "Han", "Oh", "Seo", "Shin", "Kwon", "Hwang", "Song"
         ],
-        'jobs': [
-            "Office Worker", "Teacher", "Civil Servant", "Engineer", "Nurse", "Doctor", "Pharmacist", "Designer", "Programmer", "Salesperson", "Student",
-            "Freelancer", "Researcher", "Business Owner", "Actor/Actress", "Singer", "Model"
-        ],
-        'companies': [
-            "Samsung Electronics", "SK Hynix", "Hyundai Motor", "LG Electronics", "POSCO", "Kia Corp", "Naver Corp", "Kakao Corp", "Samsung Biologics",
-            "Shinhan Financial", "KB Financial", "LG Chem", "Samsung SDI", "Celltrion", "Coupang"
+        'occupations': [
+            {"job": "Semiconductor Engineer", "company": "Samsung Electronics"},
+            {"job": "Automotive Designer", "company": "Hyundai Motor"},
+            {"job": "K-Pop Producer", "company": "HYBE Corporation"},
+            {"job": "Chemical Engineer", "company": "LG Chem"},
+            {"job": "Software Developer", "company": "Naver"},
+            {"job": "Bank Clerk", "company": "KB Kookmin Bank"},
+            {"job": "Steel Worker", "company": "POSCO"},
+            {"job": "Cosmetics Researcher", "company": "Amorepacific"},
+            {"job": "Coffee Shop Manager", "company": "Ediya Coffee"},
+            {"job": "Delivery Driver", "company": "Coupang"}
         ],
         'locations': [
             {"state": "Seoul", "city": "Gangnam-gu", "zip": "06", "streets": ["Teheran-ro", "Gangnam-daero", "Apgujeong-ro"]},
@@ -232,13 +283,17 @@ NAMES_DB = {
         'last': [
             "Li", "Wang", "Zhang", "Liu", "Chen", "Yang", "Zhao", "Huang", "Zhou", "Wu", "Xu", "Sun", "Hu", "Zhu", "Gao", "Lin", "He", "Guo", "Ma", "Luo"
         ],
-        'jobs': [
-            "Factory Worker", "Office Clerk", "Engineer", "Teacher", "Salesperson", "Driver", "Construction Worker", "Farmer", "IT Specialist", "Accountant",
-            "Doctor", "Nurse", "Student", "Civil Servant", "Business Owner", "E-commerce Seller"
-        ],
-        'companies': [
-            "Tencent Holdings", "Alibaba Group", "ICBC", "China Construction Bank", "PetroChina", "China Mobile", "Agricultural Bank of China", "Bank of China",
-            "Kweichow Moutai", "Ping An Insurance", "Meituan", "JD.com", "Xiaomi Corp", "BYD Company", "Baidu"
+        'occupations': [
+            {"job": "E-commerce Manager", "company": "Alibaba Group"},
+            {"job": "Game Developer", "company": "Tencent"},
+            {"job": "Factory Worker", "company": "Foxconn"},
+            {"job": "Bank Officer", "company": "ICBC"},
+            {"job": "Delivery Driver", "company": "Meituan"},
+            {"job": "AI Researcher", "company": "Baidu"},
+            {"job": "Mobile Engineer", "company": "Xiaomi"},
+            {"job": "Oil Engineer", "company": "PetroChina"},
+            {"job": "Insurance Agent", "company": "Ping An Insurance"},
+            {"job": "Construction Worker", "company": "China State Construction"}
         ],
         'locations': [
             {"state": "Beijing", "city": "Beijing", "zip": "10", "streets": ["Chang'an Avenue", "Wangfujing Street", "Sanlitun Road"]},
@@ -255,13 +310,17 @@ NAMES_DB = {
         'last': [
             "Patel", "Sharma", "Singh", "Kumar", "Gupta", "Rao", "Desai", "Mehta", "Reddy", "Iyer", "Jain", "Verma", "Mishra", "Shah", "Malhotra"
         ],
-        'jobs': [
-            "Software Engineer", "IT Consultant", "Data Analyst", "Call Center Agent", "Teacher", "Professor", "Doctor", "Chartered Accountant", "Civil Engineer",
-            "Government Officer", "Banker", "Sales Manager", "Business Owner", "Farmer", "Driver", "Student"
-        ],
-        'companies': [
-            "Reliance Industries", "Tata Consultancy Services", "HDFC Bank", "Infosys", "ICICI Bank", "Hindustan Unilever", "State Bank of India", "Bharti Airtel",
-            "Bajaj Finance", "Kotak Mahindra Bank", "Wipro", "HCL Technologies", "Asian Paints", "ITC Limited", "Larsen & Toubro"
+        'occupations': [
+            {"job": "IT Consultant", "company": "Tata Consultancy Services"},
+            {"job": "Software Engineer", "company": "Infosys"},
+            {"job": "Petrochemical Engineer", "company": "Reliance Industries"},
+            {"job": "Bank Manager", "company": "HDFC Bank"},
+            {"job": "Call Center Agent", "company": "Wipro"},
+            {"job": "Data Analyst", "company": "HCL Technologies"},
+            {"job": "Civil Engineer", "company": "Larsen & Toubro"},
+            {"job": "Doctor", "company": "Apollo Hospitals"},
+            {"job": "Sales Executive", "company": "Maruti Suzuki"},
+            {"job": "Railway Officer", "company": "Indian Railways"}
         ],
         'locations': [
             {"state": "Maharashtra", "city": "Mumbai", "zip": "40", "streets": ["Marine Drive", "Linking Road", "Hill Road", "Colaba Causeway"]},
@@ -283,13 +342,17 @@ NAMES_DB = {
         'last': [
             "Smith", "Jones", "Williams", "Taylor", "Brown", "Davies", "Evans", "Wilson", "Thomas", "Johnson", "Roberts", "Robinson", "Thompson", "Wright", "Walker", "White", "Edwards"
         ],
-        'jobs': [
-            "Retail Manager", "Project Manager", "Software Developer", "Accountant", "Nurse", "Teacher", "Administrator", "Sales Executive", "Customer Service Advisor",
-            "Driver", "Care Worker", "Electrician", "Plumber", "Carpenter", "Builder", "Cleaner", "Receptionist"
-        ],
-        'companies': [
-            "Unilever", "AstraZeneca", "HSBC Holdings", "BP", "Royal Dutch Shell", "GlaxoSmithKline", "Diageo", "British American Tobacco", "Rio Tinto", "Vodafone Group",
-            "Lloyds Banking Group", "Barclays", "Prudential", "Reckitt Benckiser", "Tesco", "Sainsbury's"
+        'occupations': [
+            {"job": "Banker", "company": "HSBC"},
+            {"job": "Pharmacist", "company": "Boots UK"},
+            {"job": "Retail Manager", "company": "Tesco"},
+            {"job": "Software Developer", "company": "Vodafone UK"},
+            {"job": "Energy Consultant", "company": "BP"},
+            {"job": "Nurse", "company": "NHS"},
+            {"job": "Journalist", "company": "BBC"},
+            {"job": "Flight Attendant", "company": "British Airways"},
+            {"job": "Accountant", "company": "Barclays"},
+            {"job": "Professor", "company": "University of Oxford"}
         ],
         'locations': [
             {"state": "London", "city": "London", "zip": "SW1", "streets": ["Oxford Street", "Regent Street", "Baker Street", "Piccadilly", "King's Road"]},
@@ -297,13 +360,6 @@ NAMES_DB = {
             {"state": "West Midlands", "city": "Birmingham", "zip": "B1", "streets": ["New Street", "Broad Street", "Corporation Street"]},
             {"state": "Scotland", "city": "Edinburgh", "zip": "EH1", "streets": ["Royal Mile", "Princes Street", "George Street"]}
         ]
-    },
-    'uk': { # ALIAS UK
-        'first': ["James", "John", "Robert", "Michael", "William", "David", "Richard", "Joseph", "Thomas", "Charles", "George"],
-        'last': ["Smith", "Jones", "Williams", "Taylor", "Brown", "Davies", "Evans", "Wilson", "Thomas", "Johnson"],
-        'jobs': ["Retail Manager", "Software Developer", "Accountant", "Nurse", "Teacher", "Sales Executive", "Driver", "Electrician"],
-        'companies': ["Unilever", "AstraZeneca", "HSBC", "BP", "Shell", "GSK", "Vodafone", "Tesco"],
-        'locations': [{"state": "London", "city": "London", "zip": "SW1", "streets": ["Oxford Street", "Regent Street"]}]
     },
     'de': { # GERMANY
         'first': [
@@ -313,13 +369,17 @@ NAMES_DB = {
         'last': [
             "Muller", "Schmidt", "Schneider", "Fischer", "Weber", "Meyer", "Wagner", "Becker", "Schulz", "Hoffmann", "Schafer", "Koch", "Bauer", "Richter", "Klein", "Wolf", "Schroder"
         ],
-        'jobs': [
-            "Ingenieur", "Softwareentwickler", "Lehrer", "Arzt", "Krankenschwester", "Verkaeufer", "Bueroangestellter", "Handwerker", "Mechatroniker", "Elektriker",
-            "Architekt", "Anwalt", "Polizist", "Student", "Rentner", "Geschaeftsfuehrer"
-        ],
-        'companies': [
-            "Volkswagen AG", "Daimler AG", "Allianz SE", "BMW Group", "Siemens AG", "Bosch Group", "Deutsche Telekom", "BASF SE", "Bayer AG", "Adidas AG",
-            "SAP SE", "Continental AG", "Lufthansa Group", "Deutsche Bank", "Deutsche Post DHL", "E.ON SE"
+        'occupations': [
+            {"job": "Automotive Engineer", "company": "Volkswagen AG"},
+            {"job": "Mechanical Engineer", "company": "Siemens"},
+            {"job": "Chemical Engineer", "company": "BASF"},
+            {"job": "Software Developer", "company": "SAP"},
+            {"job": "Insurance Agent", "company": "Allianz"},
+            {"job": "Postal Worker", "company": "Deutsche Post DHL"},
+            {"job": "Bank Clerk", "company": "Deutsche Bank"},
+            {"job": "Sales Associate", "company": "Adidas"},
+            {"job": "Technician", "company": "Bosch"},
+            {"job": "Pilot", "company": "Lufthansa"}
         ],
         'locations': [
             {"state": "Berlin", "city": "Berlin", "zip": "10", "streets": ["Unter den Linden", "Friedrichstrasse", "Kurfuerstendamm", "Torstrasse"]},
@@ -336,13 +396,17 @@ NAMES_DB = {
         'last': [
             "Martin", "Bernard", "Thomas", "Petit", "Robert", "Richard", "Durand", "Dubois", "Moreau", "Laurent", "Simon", "Michel", "Lefebvre", "Leroy", "Roux", "David"
         ],
-        'jobs': [
-            "Ingenieur", "Developpeur Logiciel", "Enseignant", "Medecin", "Infirmiere", "Vendeur", "Employe de bureau", "Ouvrier", "Technicien", "Chauffeur",
-            "Avocat", "Architecte", "Comptable", "Etudiant", "Retraite", "Cadre commercial"
-        ],
-        'companies': [
-            "LVMH", "TotalEnergies", "L'Oreal", "Sanofi", "Airbus", "BNP Paribas", "AXA", "Schneider Electric", "Kering", "Hermes International",
-            "Vinci", "Danone", "Air Liquide", "Orange", "Renault", "Peugeot (Stellantis)", "Carrefour"
+        'occupations': [
+            {"job": "Fashion Designer", "company": "LVMH"},
+            {"job": "Cosmetics Researcher", "company": "L'Oreal"},
+            {"job": "Aerospace Engineer", "company": "Airbus"},
+            {"job": "Banker", "company": "BNP Paribas"},
+            {"job": "Energy Consultant", "company": "TotalEnergies"},
+            {"job": "Chef", "company": "Michelin Star Restaurant"},
+            {"job": "Retail Manager", "company": "Carrefour"},
+            {"job": "Automotive Technician", "company": "Renault"},
+            {"job": "Telecom Engineer", "company": "Orange"},
+            {"job": "Insurance Broker", "company": "AXA"}
         ],
         'locations': [
             {"state": "Ile-de-France", "city": "Paris", "zip": "75", "streets": ["Champs-Elysees", "Rue de Rivoli", "Boulevard Saint-Germain", "Avenue Montaigne"]},
@@ -358,13 +422,17 @@ NAMES_DB = {
         'last': [
             "Rossi", "Russo", "Ferrari", "Esposito", "Bianchi", "Romano", "Colombo", "Ricci", "Marino", "Greco", "Bruno", "Gallo", "Conti", "De Luca", "Costa", "Giordano"
         ],
-        'jobs': [
-            "Ingegnere", "Sviluppatore Software", "Insegnante", "Medico", "Infermiere", "Commesso", "Impiegato", "Operaio", "Tecnico", "Autista",
-            "Avvocato", "Architetto", "Commercialista", "Studente", "Pensionato", "Manager", "Cuoco", "Cameriere"
-        ],
-        'companies': [
-            "Enel", "Eni", "Intesa Sanpaolo", "Ferrari", "UniCredit", "Assicurazioni Generali", "Stellantis", "Luxottica", "Atlantia", "Snam",
-            "Telecom Italia", "Leonardo", "Prada", "Pirelli", "Moncler", "Ferrero"
+        'occupations': [
+            {"job": "Automotive Engineer", "company": "Ferrari"},
+            {"job": "Fashion Designer", "company": "Prada"},
+            {"job": "Energy Technician", "company": "Enel"},
+            {"job": "Bank Clerk", "company": "Intesa Sanpaolo"},
+            {"job": "Confectioner", "company": "Ferrero"},
+            {"job": "Insurance Agent", "company": "Generali"},
+            {"job": "Tyre Specialist", "company": "Pirelli"},
+            {"job": "Optician", "company": "Luxottica"},
+            {"job": "Petroleum Engineer", "company": "Eni"},
+            {"job": "Chef", "company": "Trattoria Romana"}
         ],
         'locations': [
             {"state": "Lazio", "city": "Rome", "zip": "00", "streets": ["Via del Corso", "Via Condotti", "Via Veneto", "Via Nazionale"]},
@@ -381,13 +449,17 @@ NAMES_DB = {
         'last': [
             "Garcia", "Gonzalez", "Rodriguez", "Fernandez", "Lopez", "Martinez", "Sanchez", "Perez", "Martin", "Gomez", "Ruiz", "Diaz", "Hernandez", "Alvarez", "Moreno"
         ],
-        'jobs': [
-            "Ingeniero", "Desarrollador de Software", "Profesor", "Medico", "Enfermera", "Vendedor", "Administrativo", "Obrero", "Tecnico", "Conductor",
-            "Abogado", "Arquitecto", "Contador", "Estudiante", "Jubilado", "Gerente", "Cocinero", "Camarero"
-        ],
-        'companies': [
-            "Inditex (Zara)", "Iberdrola", "Banco Santander", "BBVA", "Amadeus IT Group", "Telefonica", "Repsol", "CaixaBank", "Cellnex Telecom", "Ferrovial",
-            "Naturgy", "Aena", "Endesa", "Red Electrica", "Mapfre"
+        'occupations': [
+            {"job": "Store Manager", "company": "Zara (Inditex)"},
+            {"job": "Banker", "company": "Banco Santander"},
+            {"job": "Energy Engineer", "company": "Iberdrola"},
+            {"job": "Telecom Technician", "company": "Telefonica"},
+            {"job": "Oil Rig Worker", "company": "Repsol"},
+            {"job": "Software Developer", "company": "Amadeus IT"},
+            {"job": "Insurance Agent", "company": "Mapfre"},
+            {"job": "Construction Manager", "company": "Ferrovial"},
+            {"job": "Hotel Manager", "company": "Melia Hotels"},
+            {"job": "Airport Staff", "company": "Aena"}
         ],
         'locations': [
             {"state": "Madrid", "city": "Madrid", "zip": "28", "streets": ["Gran Via", "Calle de Alcala", "Paseo de la Castellana", "Calle Serrano"]},
@@ -404,13 +476,17 @@ NAMES_DB = {
         'last': [
             "de Vries", "Jansen", "van de Berg", "Bakker", "van Dijk", "Visser", "Janssen", "Smit", "Meijer", "de Boer", "Mulder", "de Groot", "Bos", "Vos"
         ],
-        'jobs': [
-            "Ingenieur", "Softwareontwikkelaar", "Leraar", "Arts", "Verpleegkundige", "Verkoper", "Administratief medewerker", "Arbeider", "Technicus", "Chauffeur",
-            "Advocaat", "Architect", "Accountant", "Student", "Gepensioneerde", "Manager"
-        ],
-        'companies': [
-            "ASML Holding", "Royal Dutch Shell", "Unilever", "Prosus", "Adyen", "ING Group", "Philips", "Ahold Delhaize", "Heineken", "AkzoNobel",
-            "DSM", "Wolters Kluwer", "Randstad", "KPN", "NN Group"
+        'occupations': [
+            {"job": "Semiconductor Engineer", "company": "ASML"},
+            {"job": "Supply Chain Manager", "company": "Heineken"},
+            {"job": "Banker", "company": "ING Group"},
+            {"job": "Consumer Goods Specialist", "company": "Unilever"},
+            {"job": "Petrochemical Engineer", "company": "Shell"},
+            {"job": "Healthcare Tech", "company": "Philips"},
+            {"job": "Retail Manager", "company": "Ahold Delhaize"},
+            {"job": "Telecom Engineer", "company": "KPN"},
+            {"job": "Paint Specialist", "company": "AkzoNobel"},
+            {"job": "Fintech Developer", "company": "Adyen"}
         ],
         'locations': [
             {"state": "North Holland", "city": "Amsterdam", "zip": "10", "streets": ["Damrak", "Kalverstraat", "Leidsestraat", "P.C. Hooftstraat"]},
@@ -427,13 +503,17 @@ NAMES_DB = {
         'last': [
             "Nowak", "Kowalski", "Wisniewski", "Wojcik", "Kowalczyk", "Kaminski", "Lewandowski", "Zielinski", "Szymanski", "Wozniak", "Dabrowski", "Kozlowski"
         ],
-        'jobs': [
-            "Inzynier", "Programista", "Nauczyciel", "Lekarz", "Pielegniarka", "Sprzedawca", "Pracownik biurowy", "Robotnik", "Technik", "Kierowca",
-            "Prawnik", "Architekt", "Ksiegowy", "Student", "Emeryt", "Kierownik"
-        ],
-        'companies': [
-            "PKN Orlen", "PKO Bank Polski", "PGNiG", "PZU", "KGHM Polska Miedz", "Bank Pekao", "Dino Polska", "CD Projekt", "LPP", "Cyfrowy Polsat",
-            "Santander Bank Polska", "ING Bank Slaski", "Allegro", "Tauron Polska Energia", "Orange Polska"
+        'occupations': [
+            {"job": "Refinery Worker", "company": "PKN Orlen"},
+            {"job": "Bank Clerk", "company": "PKO Bank Polski"},
+            {"job": "Game Developer", "company": "CD Projekt Red"},
+            {"job": "Insurance Agent", "company": "PZU"},
+            {"job": "Miner", "company": "KGHM"},
+            {"job": "Retail Staff", "company": "Biedronka"},
+            {"job": "E-commerce Specialist", "company": "Allegro"},
+            {"job": "Telecom Technician", "company": "Orange Polska"},
+            {"job": "Fashion Retailer", "company": "LPP (Reserved)"},
+            {"job": "Software Engineer", "company": "Comarch"}
         ],
         'locations': [
             {"state": "Masovian", "city": "Warsaw", "zip": "00", "streets": ["Krakowskie Przedmiescie", "Nowy Swiat", "Marszalkowska", "Aleje Jerozolimskie"]},
@@ -450,13 +530,17 @@ NAMES_DB = {
         'last': [
             "Yilmaz", "Kaya", "Demir", "Sahin", "Celik", "Yildiz", "Yildirim", "Ozturk", "Aydin", "Ozdemir", "Arslan", "Dogan", "Kilic", "Aslan", "Cetin"
         ],
-        'jobs': [
-            "Muhendis", "Yazilimci", "Ogretmen", "Doktor", "Hemsire", "Satis Elemani", "Memur", "Isci", "Teknisyen", "Sofor",
-            "Avukat", "Mimar", "Muhasebeci", "Ogrenci", "Emekli", "Yonetici", "Esnaf"
-        ],
-        'companies': [
-            "Koc Holding", "Sabanci Holding", "Turkcell", "Turk Hava Yollari", "Ford Otosan", "Tupras", "BIM Birlesik Magazalar", "Garanti BBVA", "Akbank", "Isbank",
-            "Aselsan", "Eregli Demir Celik", "Arcelik", "Vestel", "Sise Cam"
+        'occupations': [
+            {"job": "Automotive Worker", "company": "Ford Otosan"},
+            {"job": "Telecom Engineer", "company": "Turkcell"},
+            {"job": "Flight Attendant", "company": "Turkish Airlines"},
+            {"job": "Refinery Technician", "company": "Tupras"},
+            {"job": "Appliance Technician", "company": "Arcelik"},
+            {"job": "Banker", "company": "Garanti BBVA"},
+            {"job": "Retail Manager", "company": "BIM"},
+            {"job": "Defense Engineer", "company": "Aselsan"},
+            {"job": "Glass Worker", "company": "Sisecam"},
+            {"job": "Steel Worker", "company": "Erdemir"}
         ],
         'locations': [
             {"state": "Istanbul", "city": "Istanbul", "zip": "34", "streets": ["Istiklal Caddesi", "Bagdat Caddesi", "Abdi Ipekci Caddesi", "Nispetiye Caddesi"]},
@@ -473,13 +557,17 @@ NAMES_DB = {
         'last': [
             "Ivanov", "Smirnov", "Kuznetsov", "Popov", "Vasiliev", "Petrov", "Sokolov", "Mikhailov", "Novikov", "Fedorov", "Morozov", "Volkov", "Alekseev", "Lebedev"
         ],
-        'jobs': [
-            "Engineer", "Software Developer", "Teacher", "Doctor", "Nurse", "Sales Manager", "Office Manager", "Worker", "Technician", "Driver",
-            "Lawyer", "Accountant", "Student", "Pensioner", "Business Owner", "Security Guard"
-        ],
-        'companies': [
-            "Gazprom", "Sberbank", "Rosneft", "Lukoil", "Novatek", "Yandex", "Norilsk Nickel", "Polyus", "Tatneft", "Surgutneftegas",
-            "VTB Bank", "Severstal", "NLMK", "X5 Retail Group", "Magnit"
+        'occupations': [
+            {"job": "Gas Engineer", "company": "Gazprom"},
+            {"job": "Bank Clerk", "company": "Sberbank"},
+            {"job": "Oil Rig Worker", "company": "Rosneft"},
+            {"job": "Software Developer", "company": "Yandex"},
+            {"job": "Retail Manager", "company": "X5 Retail Group"},
+            {"job": "Steel Worker", "company": "Severstal"},
+            {"job": "Miner", "company": "Norilsk Nickel"},
+            {"job": "Supermarket Staff", "company": "Magnit"},
+            {"job": "Telecom Technician", "company": "MTS"},
+            {"job": "Banker", "company": "VTB Bank"}
         ],
         'locations': [
             {"state": "Moscow", "city": "Moscow", "zip": "10", "streets": ["Tverskaya Street", "Arbat Street", "Leninsky Prospekt", "Kutuzovsky Prospekt"]},
@@ -496,13 +584,17 @@ NAMES_DB = {
         'last': [
             "Melnyk", "Shevchenko", "Boyko", "Kovalenko", "Bondarenko", "Tkachenko", "Kravchenko", "Koval", "Oliynyk", "Shevchuk", "Polishchuk", "Lysenko"
         ],
-        'jobs': [
-            "Engineer", "IT Specialist", "Teacher", "Doctor", "Nurse", "Salesperson", "Office Manager", "Worker", "Technician", "Driver",
-            "Lawyer", "Accountant", "Student", "Freelancer", "Business Owner"
-        ],
-        'companies': [
-            "Metinvest", "DTEK", "Naftogaz", "Kernel", "MHP", "Ferrexpo", "PrivatBank", "Oschadbank", "Ukrzaliznytsia", "Energoatom",
-            "Nova Poshta", "Rozetka", "SoftServe", "EPAM Systems"
+        'occupations': [
+            {"job": "Software Engineer", "company": "SoftServe"},
+            {"job": "Steel Worker", "company": "Metinvest"},
+            {"job": "Energy Technician", "company": "DTEK"},
+            {"job": "Gas Engineer", "company": "Naftogaz"},
+            {"job": "Railway Conductor", "company": "Ukrzaliznytsia"},
+            {"job": "Delivery Driver", "company": "Nova Poshta"},
+            {"job": "Bank Teller", "company": "PrivatBank"},
+            {"job": "Agricultural Worker", "company": "Kernel"},
+            {"job": "E-commerce Manager", "company": "Rozetka"},
+            {"job": "IT Consultant", "company": "EPAM Ukraine"}
         ],
         'locations': [
             {"state": "Kyiv", "city": "Kyiv", "zip": "01", "streets": ["Khreshchatyk", "Volodymyrska", "Andriyivskyy Descent", "Saksahanskoho"]},
@@ -523,13 +615,17 @@ NAMES_DB = {
         'last': [
             "Smith", "Johnson", "Williams", "Brown", "Jones", "Garcia", "Miller", "Davis", "Rodriguez", "Martinez", "Hernandez", "Lopez", "Gonzalez", "Wilson", "Anderson", "Thomas", "Taylor", "Moore", "Jackson"
         ],
-        'jobs': [
-            "Software Engineer", "Registered Nurse", "Teacher", "Project Manager", "Sales Representative", "Account Manager", "Office Manager", "Operations Manager",
-            "Supervisor", "Administrative Assistant", "Customer Service Rep", "Driver", "Technician", "Electrician", "Mechanic", "Construction Worker", "Police Officer"
-        ],
-        'companies': [
-            "Apple Inc.", "Microsoft Corp", "Amazon.com Inc.", "Alphabet Inc. (Google)", "Facebook (Meta)", "Tesla Inc.", "Berkshire Hathaway", "NVIDIA Corp",
-            "JPMorgan Chase", "Johnson & Johnson", "Visa Inc.", "UnitedHealth Group", "Walmart Inc.", "Procter & Gamble", "Bank of America", "Mastercard"
+        'occupations': [
+            {"job": "Software Engineer", "company": "Google"},
+            {"job": "Cloud Architect", "company": "Amazon AWS"},
+            {"job": "Product Designer", "company": "Apple"},
+            {"job": "Investment Banker", "company": "JPMorgan Chase"},
+            {"job": "Registered Nurse", "company": "UnitedHealth Group"},
+            {"job": "Retail Associate", "company": "Walmart"},
+            {"job": "Operations Manager", "company": "FedEx"},
+            {"job": "Financial Analyst", "company": "Bank of America"},
+            {"job": "Marketing Specialist", "company": "Coca-Cola"},
+            {"job": "Data Scientist", "company": "Microsoft"}
         ],
         'locations': [
             {"state": "New York", "city": "New York City", "zip": "100", "streets": ["Broadway", "5th Avenue", "Madison Avenue", "Wall Street", "Park Avenue"]},
@@ -547,13 +643,17 @@ NAMES_DB = {
         'last': [
             "Smith", "Brown", "Tremblay", "Martin", "Roy", "Wilson", "Gagnon", "Lee", "Johnson", "MacDonald", "Thompson", "White", "Campbell", "Singh", "Wong"
         ],
-        'jobs': [
-            "Software Engineer", "Nurse", "Teacher", "Sales Associate", "Administrative Assistant", "Project Manager", "Accountant", "Customer Service Rep",
-            "Driver", "Construction Worker", "Electrician", "Plumber", "Mechanic", "Chef", "Server"
-        ],
-        'companies': [
-            "Royal Bank of Canada", "Toronto-Dominion Bank", "Shopify", "Enbridge", "Canadian National Railway", "Bank of Nova Scotia", "Brookfield Asset Management",
-            "Bank of Montreal", "TC Energy", "Canadian Pacific Railway", "Manulife Financial", "BCE Inc. (Bell)", "Suncor Energy", "Alimentation Couche-Tard"
+        'occupations': [
+            {"job": "Bank Manager", "company": "RBC Royal Bank"},
+            {"job": "Software Developer", "company": "Shopify"},
+            {"job": "Pipeline Engineer", "company": "Enbridge"},
+            {"job": "Train Conductor", "company": "CN Railway"},
+            {"job": "Financial Advisor", "company": "TD Bank"},
+            {"job": "Telecom Technician", "company": "Bell Canada"},
+            {"job": "Insurance Broker", "company": "Manulife"},
+            {"job": "Retail Manager", "company": "Loblaws"},
+            {"job": "Investment Analyst", "company": "Brookfield"},
+            {"job": "Civil Servant", "company": "Government of Canada"}
         ],
         'locations': [
             {"state": "Ontario", "city": "Toronto", "zip": "M5", "streets": ["Yonge Street", "Queen Street", "King Street", "Bay Street", "Bloor Street"]},
@@ -570,13 +670,17 @@ NAMES_DB = {
         'last': [
             "Silva", "Santos", "Oliveira", "Souza", "Rodrigues", "Ferreira", "Alves", "Pereira", "Lima", "Gomes", "Costa", "Ribeiro", "Martins", "Carvalho", "Almeida"
         ],
-        'jobs': [
-            "Engenheiro", "Desenvolvedor de Software", "Professor", "Medico", "Enfermeira", "Vendedor", "Auxiliar Administrativo", "Trabalhador", "Tecnico", "Motorista",
-            "Advogado", "Arquiteto", "Contador", "Estudante", "Aposentado", "Gerente", "Seguranca"
-        ],
-        'companies': [
-            "Petrobras", "Vale S.A.", "Itau Unibanco", "Banco Bradesco", "Ambev", "Banco do Brasil", "WEG S.A.", "Magazine Luiza", "B3 S.A.", "JBS S.A.",
-            "Suzano", "Gerdau", "Eletrobras", "Localiza", "BTG Pactual"
+        'occupations': [
+            {"job": "Petroleum Engineer", "company": "Petrobras"},
+            {"job": "Mining Engineer", "company": "Vale"},
+            {"job": "Bank Teller", "company": "Itau Unibanco"},
+            {"job": "Brewery Worker", "company": "Ambev"},
+            {"job": "Bank Manager", "company": "Bradesco"},
+            {"job": "Meat Packer", "company": "JBS"},
+            {"job": "Retail Associate", "company": "Magazine Luiza"},
+            {"job": "Steel Worker", "company": "Gerdau"},
+            {"job": "Paper Technician", "company": "Suzano"},
+            {"job": "Investment Analyst", "company": "BTG Pactual"}
         ],
         'locations': [
             {"state": "Sao Paulo", "city": "Sao Paulo", "zip": "01", "streets": ["Avenida Paulista", "Rua Augusta", "Avenida Faria Lima", "Rua Oscar Freire"]},
@@ -597,13 +701,17 @@ NAMES_DB = {
         'last': [
             "Smith", "Jones", "Williams", "Brown", "Wilson", "Taylor", "Nguyen", "Johnson", "Martin", "White", "Anderson", "Walker", "Thompson", "Thomas", "Lee"
         ],
-        'jobs': [
-            "Software Engineer", "Nurse", "Teacher", "Project Manager", "Accountant", "Electrician", "Plumber", "Carpenter", "Builder", "Sales Assistant",
-            "Administrative Assistant", "Chef", "Barista", "Driver", "Cleaner", "Mining Engineer"
-        ],
-        'companies': [
-            "Commonwealth Bank", "BHP Group", "CSL Limited", "Westpac Banking Corp", "National Australia Bank", "ANZ Banking Group", "Wesfarmers", "Macquarie Group",
-            "Woolworths Group", "Rio Tinto", "Telstra", "Transurban Group", "Goodman Group", "Fortescue Metals Group"
+        'occupations': [
+            {"job": "Bank Manager", "company": "Commonwealth Bank"},
+            {"job": "Mining Engineer", "company": "BHP"},
+            {"job": "Biotech Researcher", "company": "CSL"},
+            {"job": "Financial Advisor", "company": "Westpac"},
+            {"job": "Retail Manager", "company": "Woolworths"},
+            {"job": "Telecom Technician", "company": "Telstra"},
+            {"job": "Investment Banker", "company": "Macquarie Group"},
+            {"job": "Civil Engineer", "company": "Transurban"},
+            {"job": "Logistics Manager", "company": "Wesfarmers"},
+            {"job": "Mining Supervisor", "company": "Rio Tinto"}
         ],
         'locations': [
             {"state": "New South Wales", "city": "Sydney", "zip": "20", "streets": ["George Street", "Pitt Street", "Oxford Street", "Macquarie Street"]},
@@ -620,13 +728,17 @@ NAMES_DB = {
         'last': [
             "Dlamini", "Nkosi", "Ndlovu", "Khumalo", "Botha", "Van der Merwe", "Naidoo", "Patel", "Smith", "Sithole", "Mokoena", "Molefe", "Jacobs", "Pillay"
         ],
-        'jobs': [
-            "Software Developer", "Engineer", "Teacher", "Nurse", "Sales Consultant", "Administrator", "Driver", "Security Guard", "Miner", "Farmer",
-            "Accountant", "Lawyer", "Doctor", "Student", "Entrepreneur", "Domestic Worker"
-        ],
-        'companies': [
-            "Naspers", "FirstRand", "Standard Bank Group", "Sasol", "MTN Group", "Vodacom Group", "Capitec Bank", "Anglo American Platinum", "Gold Fields",
-            "Sanlam", "Absa Group", "Shoprite Holdings", "Bidvest Group", "Discovery Limited"
+        'occupations': [
+            {"job": "Media Specialist", "company": "Naspers"},
+            {"job": "Bank Teller", "company": "Standard Bank"},
+            {"job": "Chemical Engineer", "company": "Sasol"},
+            {"job": "Telecom Engineer", "company": "MTN Group"},
+            {"job": "Loan Officer", "company": "Capitec Bank"},
+            {"job": "Mining Engineer", "company": "Anglo American"},
+            {"job": "Insurance Agent", "company": "Sanlam"},
+            {"job": "Retail Manager", "company": "Shoprite"},
+            {"job": "Logistics Coordinator", "company": "Bidvest"},
+            {"job": "Health Consultant", "company": "Discovery Health"}
         ],
         'locations': [
             {"state": "Gauteng", "city": "Johannesburg", "zip": "20", "streets": ["Mandela Bridge", "Commissioner Street", "Main Street", "Eloff Street"]},
@@ -653,25 +765,19 @@ def get_romanized_name(country_code):
     last = random.choice(data['last'])
     return f"{first} {last}"
 
-def get_custom_job(country_code):
-    """Mengambil pekerjaan custom jika tersedia."""
+def get_custom_occupation(country_code):
+    """
+    Mengembalikan pasangan Job dan Company yang masuk akal.
+    Returns: (job_title, company_name)
+    """
     code = country_code.lower()
     if code == 'uk': code = 'gb'
     
     data = NAMES_DB.get(code)
-    if data and 'jobs' in data:
-        return random.choice(data['jobs'])
-    return None
-
-def get_custom_company(country_code):
-    """Mengambil nama perusahaan custom jika tersedia."""
-    code = country_code.lower()
-    if code == 'uk': code = 'gb'
-    
-    data = NAMES_DB.get(code)
-    if data and 'companies' in data:
-        return random.choice(data['companies'])
-    return None
+    if data and 'occupations' in data:
+        occ = random.choice(data['occupations'])
+        return occ['job'], occ['company']
+    return None, None
 
 def get_custom_location(country_code):
     """
