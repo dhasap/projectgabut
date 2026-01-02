@@ -640,7 +640,26 @@ async def check_sub_callback(callback_query: types.CallbackQuery):
             fake_msg = callback_query.message
             fake_msg.from_user = callback_query.from_user
             fake_msg.text = "/start"
-            await helpstr(fake_msg)
+            
+            # Kita panggil logic helpstr manual karena context state berbeda
+            is_adm = await is_owner(user_id)
+            start_msg = (
+                f"<b>👋 Halo {fake_msg.from_user.first_name}! Selamat Datang di {BOT_NAME}</b>\n\n"
+                "<b>🤖 Bot Utilitas All-in-One Terbaik</b>\n"
+                "Terima kasih telah bergabung! Sekarang Anda bisa menikmati semua fitur kami.\n\n"
+                "<b>🔥 Fitur Utama Kami:</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                "💳 <b>CC Checker Live</b>\n"
+                "⚙️ <b>VCC Generator</b>\n"
+                "🌍 <b>Fake Identity</b>\n"
+                "📧 <b>Temp Mail</b>\n"
+                "🏦 <b>IBAN Generator</b>\n"
+                "🔍 <b>BIN Lookup</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                "<b>🚀 Mulai Sekarang!</b>\n"
+                "Pilih salah satu menu di bawah ini untuk memulai."
+            )
+            await bot.send_message(user_id, start_msg, reply_markup=get_reply_keyboard(is_adm))
             
     except Exception:
         # If error (bot not admin), allow pass to avoid getting stuck
