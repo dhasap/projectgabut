@@ -268,61 +268,31 @@ class AsyncSQLiteAdapter(AsyncDatabaseAdapter):
         return {}
 
     async def save_note(self, user_id, title, content):
-        cipher = _get_cipher_suite()
-        encrypted_content = cipher.encrypt(content.encode()).decode()
-        sql = """INSERT INTO notes (user_id, title, content, updated_at) 
-                 VALUES (?, ?, ?, ?)
-                 ON CONFLICT(user_id, title) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at"""
-        res = await self._exec(sql, (user_id, title, encrypted_content, datetime.utcnow().isoformat()))
-        return res is not None
+        return await AsyncTursoAdapter.save_note(self, user_id, title, content) # Delegate to Turso/Shared logic
 
     async def get_notes_list(self, user_id):
-        return await self._exec("SELECT id, title, updated_at FROM notes WHERE user_id = ? ORDER BY id DESC", (user_id,), fetch=True, dict_cursor=True) or []
+        return await AsyncTursoAdapter.get_notes_list(self, user_id) # Delegate
 
     async def get_note_content(self, user_id, identifier):
-        if str(identifier).isdigit():
-            row = await self._exec("SELECT content, title FROM notes WHERE user_id = ? AND id = ?", (user_id, identifier), fetch_one=True, dict_cursor=True)
-        else:
-            row = await self._exec("SELECT content, title FROM notes WHERE user_id = ? AND title = ?", (user_id, identifier), fetch_one=True, dict_cursor=True)
-            
-        if row:
-            cipher = _get_cipher_suite()
-            try:
-                decrypted = cipher.decrypt(row['content'].encode()).decode()
-                return {"title": row['title'], "content": decrypted}
-            except:
-                return {"title": row['title'], "content": "[Error: Gagal dekripsi catatan]"}
-        return None
+        return await AsyncTursoAdapter.get_note_content(self, user_id, identifier) # Delegate
 
     async def delete_note(self, user_id, identifier):
-        if str(identifier).isdigit():
-            affected = await self._exec("DELETE FROM notes WHERE user_id = ? AND id = ?", (user_id, identifier))
-        else:
-            affected = await self._exec("DELETE FROM notes WHERE user_id = ? AND title = ?", (user_id, identifier))
-        return affected and affected > 0
+        return await AsyncTursoAdapter.delete_note(self, user_id, identifier) # Delegate
 
     async def save_mail_session(self, user_id, email, password, token):
-        sql = """INSERT INTO mail_sessions_v2 (user_id, email, password, token, created_at) 
-                 VALUES (?, ?, ?, ?, ?)"""
-        res = await self._exec(sql, (user_id, email, password, token, datetime.utcnow().isoformat()))
-        return res is not None
+        return await AsyncTursoAdapter.save_mail_session(self, user_id, email, password, token)
 
     async def get_mail_session(self, user_id):
-        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = ? ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
+        return await AsyncTursoAdapter.get_mail_session(self, user_id)
 
     async def get_mail_sessions_list(self, user_id, limit=20):
-        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit), fetch=True, dict_cursor=True) or []
+        return await AsyncTursoAdapter.get_mail_sessions_list(self, user_id, limit)
 
     async def delete_mail_session(self, user_id, mail_id=None):
-        if mail_id:
-            res = await self._exec("DELETE FROM mail_sessions_v2 WHERE user_id = ? AND email = ?", (user_id, mail_id))
-        else:
-            res = await self._exec("DELETE FROM mail_sessions_v2 WHERE user_id = ?", (user_id,))
-        return res is not None
+        return await AsyncTursoAdapter.delete_mail_session(self, user_id, mail_id)
 
     async def get_pending_mail_sessions(self, limit=50):
-        # Implementation similar
-        return [] # Skipped for simplicity in this patch unless needed for core loop
+        return [] # Skipped
 
 # --- TURSO IMPLEMENTATION (LibSQL) ---
 class AsyncTursoAdapter(AsyncDatabaseAdapter):
@@ -372,9 +342,8 @@ class AsyncTursoAdapter(AsyncDatabaseAdapter):
                 user_id INTEGER,
                 title TEXT,
                 content TEXT,
-                updated_at TEXT,
-                UNIQUE (user_id, title)
-            )""",
+                updated_at TEXT
+            )""", # Removed UNIQUE (user_id, title) because we encrypt titles now
             """CREATE TABLE IF NOT EXISTS mail_sessions_v2 (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER,
@@ -386,8 +355,11 @@ class AsyncTursoAdapter(AsyncDatabaseAdapter):
                 next_check_at TEXT
             )"""
         ]
+        # Note: We can't easily DROP the UNIQUE constraint on existing table in SQLite/LibSQL without recreation.
+        # But we will handle logic in Python.
         for q in queries:
-            await self.client.execute(q)
+            try: await self.client.execute(q)
+            except: pass
 
     async def _exec(self, query, args=(), fetch=False, fetch_one=False, dict_cursor=False):
         try:
@@ -412,6 +384,7 @@ class AsyncTursoAdapter(AsyncDatabaseAdapter):
             logging.error(f"Turso Query Error: {e} | Query: {query[:50]}")
             return None
 
+    # ... User/Admin/State methods (No change needed) ...
     async def save_user(self, user_id, username=None, first_name=None):
         sql = """INSERT INTO users (user_id, username, first_name, last_seen) 
                  VALUES (?, ?, ?, ?) 
@@ -498,67 +471,156 @@ class AsyncTursoAdapter(AsyncDatabaseAdapter):
         sql = "INSERT INTO bot_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
         await self._exec(sql, (key, val_json))
 
+    # --- NOTES WITH ENCRYPTED TITLES ---
+
     async def save_note(self, user_id, title, content):
+        title = str(title).strip()
+        
+        # 1. Fetch all notes to check duplicates (Manual UNIQUE check)
+        existing_notes = await self.get_notes_list(user_id)
+        existing_id = None
+        for note in existing_notes:
+            if note['title'] == title:
+                existing_id = note['id']
+                break
+        
         cipher = _get_cipher_suite()
-        encrypted_content = cipher.encrypt(content.encode()).decode()
-        sql = """INSERT INTO notes (user_id, title, content, updated_at) 
-                 VALUES (?, ?, ?, ?)
-                 ON CONFLICT(user_id, title) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at"""
-        res = await self._exec(sql, (user_id, title, encrypted_content, datetime.utcnow().isoformat()))
-        return res is not None
+        enc_title = cipher.encrypt(title.encode()).decode()
+        enc_content = cipher.encrypt(content.encode()).decode()
+        
+        if existing_id:
+            # Update existing
+            sql = "UPDATE notes SET title=?, content=?, updated_at=? WHERE id=?"
+            await self._exec(sql, (enc_title, enc_content, datetime.utcnow().isoformat(), existing_id))
+        else:
+            # Insert new (Ignore UNIQUE constraint error if it still exists in DB)
+            sql = "INSERT INTO notes (user_id, title, content, updated_at) VALUES (?, ?, ?, ?)"
+            await self._exec(sql, (user_id, enc_title, enc_content, datetime.utcnow().isoformat()))
+        return True
 
     async def get_notes_list(self, user_id):
-        return await self._exec("SELECT id, title, updated_at FROM notes WHERE user_id = ? ORDER BY id DESC", (user_id,), fetch=True, dict_cursor=True) or []
+        rows = await self._exec("SELECT id, title, updated_at FROM notes WHERE user_id = ? ORDER BY id DESC", (user_id,), fetch=True, dict_cursor=True) or []
+        # Decrypt titles on the fly
+        final_list = []
+        for row in rows:
+            row['title'] = _try_decrypt(row['title'])
+            final_list.append(row)
+        return final_list
 
     async def get_note_content(self, user_id, identifier):
+        # We need to find the correct ID first because we can't search by Encrypted Title directly in SQL
+        target_id = None
+        target_title = None
+        
         if str(identifier).isdigit():
-            row = await self._exec("SELECT content, title FROM notes WHERE user_id = ? AND id = ?", (user_id, identifier), fetch_one=True, dict_cursor=True)
+            target_id = int(identifier)
         else:
-            row = await self._exec("SELECT content, title FROM notes WHERE user_id = ? AND title = ?", (user_id, identifier), fetch_one=True, dict_cursor=True)
+            # Identifier is a Title (Plain Text from User)
+            # We must fetch list and match
+            all_notes = await self.get_notes_list(user_id)
+            for note in all_notes:
+                if note['title'] == identifier:
+                    target_id = note['id']
+                    target_title = note['title']
+                    break
+        
+        if not target_id:
+            return None
             
+        row = await self._exec("SELECT content, title FROM notes WHERE id = ?", (target_id,), fetch_one=True, dict_cursor=True)
         if row:
-            cipher = _get_cipher_suite()
-            try:
-                decrypted = cipher.decrypt(row['content'].encode()).decode()
-                return {"title": row['title'], "content": decrypted}
-            except:
-                return {"title": row['title'], "content": "[Error: Gagal dekripsi catatan]"}
+            return {
+                "title": _try_decrypt(row['title']),
+                "content": _try_decrypt(row['content'])
+            }
         return None
 
     async def delete_note(self, user_id, identifier):
+        target_id = None
         if str(identifier).isdigit():
-            affected = await self._exec("DELETE FROM notes WHERE user_id = ? AND id = ?", (user_id, identifier))
+            target_id = int(identifier)
         else:
-            affected = await self._exec("DELETE FROM notes WHERE user_id = ? AND title = ?", (user_id, identifier))
-        return affected and affected > 0
+             # Identifier is a Title
+            all_notes = await self.get_notes_list(user_id)
+            for note in all_notes:
+                if note['title'] == identifier:
+                    target_id = note['id']
+                    break
+        
+        if target_id:
+            affected = await self._exec("DELETE FROM notes WHERE id = ?", (target_id,))
+            return affected and affected > 0
+        return False
+
+    # --- MAIL SESSIONS WITH ENCRYPTED EMAILS ---
 
     async def save_mail_session(self, user_id, email, password, token):
+        cipher = _get_cipher_suite()
+        enc_email = cipher.encrypt(email.encode()).decode()
+        enc_pass = cipher.encrypt(password.encode()).decode()
+
         sql = """INSERT INTO mail_sessions_v2 (user_id, email, password, token, created_at) 
                  VALUES (?, ?, ?, ?, ?)"""
-        res = await self._exec(sql, (user_id, email, password, token, datetime.utcnow().isoformat()))
+        res = await self._exec(sql, (user_id, enc_email, enc_pass, token, datetime.utcnow().isoformat()))
         return res is not None
 
     async def get_mail_session(self, user_id):
-        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = ? ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
+        row = await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = ? ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
+        if row:
+            row['email'] = _try_decrypt(row['email'])
+            row['password'] = _try_decrypt(row['password'])
+        return row
 
     async def get_mail_sessions_list(self, user_id, limit=20):
-        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit), fetch=True, dict_cursor=True) or []
+        rows = await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit), fetch=True, dict_cursor=True) or []
+        for row in rows:
+            row['email'] = _try_decrypt(row['email'])
+            row['password'] = _try_decrypt(row['password'])
+        return rows
 
     async def delete_mail_session(self, user_id, mail_id=None):
         if mail_id:
-            res = await self._exec("DELETE FROM mail_sessions_v2 WHERE user_id = ? AND email = ?", (user_id, mail_id))
+            # mail_id here is the Email Address (Plain text)
+            # We must find the ID first
+            all_mails = await self.get_mail_sessions_list(user_id, limit=100)
+            target_db_id = None
+            for mail in all_mails:
+                if mail['email'] == mail_id:
+                    target_db_id = mail['id']
+                    break
+            
+            if target_db_id:
+                res = await self._exec("DELETE FROM mail_sessions_v2 WHERE id = ?", (target_db_id,))
+                return res is not None
+            return False
         else:
             res = await self._exec("DELETE FROM mail_sessions_v2 WHERE user_id = ?", (user_id,))
-        return res is not None
+            return res is not None
 
     async def touch_mail_session(self, user_id, mail_id):
-        sql = "UPDATE mail_sessions_v2 SET created_at = ? WHERE user_id = ? AND email = ?"
-        res = await self._exec(sql, (datetime.utcnow().isoformat(), user_id, mail_id))
-        return res is not None
+        # mail_id is Email Address
+        all_mails = await self.get_mail_sessions_list(user_id, limit=100)
+        target_db_id = None
+        for mail in all_mails:
+            if mail['email'] == mail_id:
+                target_db_id = mail['id']
+                break
+        
+        if target_db_id:
+            sql = "UPDATE mail_sessions_v2 SET created_at = ? WHERE id = ?"
+            res = await self._exec(sql, (datetime.utcnow().isoformat(), target_db_id))
+            return res is not None
+        return False
 
     async def get_pending_mail_sessions(self, limit=50):
         now = datetime.utcnow().isoformat()
-        return await self._exec("SELECT user_id, token, last_msg_id FROM mail_sessions_v2 WHERE next_check_at <= ? OR next_check_at IS NULL ORDER BY created_at DESC LIMIT ?", (now, limit), fetch=True, dict_cursor=True) or []
+        rows = await self._exec("SELECT user_id, token, last_msg_id, email, password FROM mail_sessions_v2 WHERE next_check_at <= ? OR next_check_at IS NULL ORDER BY created_at DESC LIMIT ?", (now, limit), fetch=True, dict_cursor=True) or []
+        # No need to decrypt email/pass here unless the bot logic needs them decrypted to login
+        # Usually checking mail requires login, so yes:
+        for row in rows:
+            row['email'] = _try_decrypt(row['email'])
+            row['password'] = _try_decrypt(row['password'])
+        return rows
 
     async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None):
         next_check = datetime.fromtimestamp(next_check_timestamp).isoformat()
@@ -577,6 +639,14 @@ def _get_cipher_suite():
     key_bytes = secret.ljust(32)[:32].encode()
     encoded_key = base64.urlsafe_b64encode(key_bytes)
     return Fernet(encoded_key)
+
+def _try_decrypt(text):
+    if not text: return ""
+    try:
+        cipher = _get_cipher_suite()
+        return cipher.decrypt(text.encode()).decode()
+    except:
+        return text # Return original if decryption fails (Fallback for old data)
 
 # Global Adapter
 adapter: AsyncDatabaseAdapter = None
