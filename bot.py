@@ -226,6 +226,8 @@ class AccessMiddleware(BaseMiddleware):
                         raise CancelHandler()
                     else:
                         FORCE_SUB_CACHE[user_id] = current_time + 300
+                except CancelHandler:
+                    raise
                 except Exception:
                     pass
 
