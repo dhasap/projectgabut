@@ -4,7 +4,6 @@ PyYAML
 bs4
 Faker
 psutil
-supabase
 cryptography
 aiomysql
 redis
