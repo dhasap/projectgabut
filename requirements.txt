@@ -11,3 +11,4 @@ redis
 async_timeout
 aiosqlite
 python-dotenv
+libsql-client

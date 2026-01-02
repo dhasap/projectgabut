@@ -362,348 +362,6 @@ class AsyncSupabaseAdapter(AsyncDatabaseAdapter):
     async def update_mail_last_id(self, user_id, msg_id):
         await self.update_mail_check_time(user_id, time.time(), msg_id)
 
-# --- MYSQL / TiDB IMPLEMENTATION (PURE ASYNC) ---
-class AsyncMySQLAdapter(AsyncDatabaseAdapter):
-    def __init__(self, host, port, user, password, db_name, ssl_ca=None):
-        import certifi
-        self.db_config = {
-            'host': host,
-            'port': port,
-            'user': user,
-            'password': password,
-            'db': db_name,
-            'autocommit': True,
-            'connect_timeout': 10,
-            'charset': 'utf8mb4',
-            'use_unicode': True
-        }
-        
-        # Smart SSL Handling
-        ca_path = ssl_ca
-        if ssl_ca and not os.path.exists(ssl_ca):
-            logging.warning(f"⚠️ SSL CA file '{ssl_ca}' not found. Using system certs (certifi).")
-            ca_path = certifi.where()
-        elif not ssl_ca:
-             # Default fallback if env not set
-             ca_path = certifi.where()
-             
-        if ca_path and os.path.exists(ca_path):
-            self.db_config['ssl'] = {'ca': ca_path}
-            logging.info(f"🔒 SSL Configured using: {ca_path}")
-        else:
-            logging.warning("⚠️ No SSL CA found. Connection might fail if TiDB requires SSL.")
-        
-        self.pool = None
-
-    async def initialize(self):
-        import aiomysql
-        try:
-            self.pool = await aiomysql.create_pool(
-                minsize=5, 
-                maxsize=20, 
-                pool_recycle=300, 
-                **self.db_config
-            )
-            logging.info("✅ Menggunakan Database: TiDB (Async Pool Optimized)")
-            if os.getenv("RESET_DB", "").lower() in {"1", "true", "yes"}:
-                logging.warning("⚠️ RESET_DB aktif, menghapus & membuat ulang semua tabel.")
-                await self.recreate_tables()
-            else:
-                await self.initialize_tables()
-        except Exception as e:
-            logging.error(f"❌ Failed creating DB Pool: {e}")
-            raise e
-
-    async def initialize_tables(self):
-        queries = [
-            """CREATE TABLE IF NOT EXISTS users (
-                user_id BIGINT PRIMARY KEY,
-                username VARCHAR(255),
-                first_name VARCHAR(255),
-                last_seen DATETIME,
-                INDEX idx_last_seen (last_seen)
-            )""",
-            """CREATE TABLE IF NOT EXISTS admins (
-                user_id BIGINT PRIMARY KEY,
-                username VARCHAR(255),
-                promoted_at DATETIME
-            )""",
-            """CREATE TABLE IF NOT EXISTS banned (
-                user_id BIGINT PRIMARY KEY,
-                username VARCHAR(255),
-                reason TEXT,
-                banned_at DATETIME
-            )""",
-            """CREATE TABLE IF NOT EXISTS bot_state (
-                `key` VARCHAR(50) PRIMARY KEY,
-                value JSON
-            )""",
-            """CREATE TABLE IF NOT EXISTS activity_logs (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                admin_id BIGINT,
-                username VARCHAR(255),
-                action VARCHAR(50),
-                details TEXT,
-                created_at DATETIME,
-                INDEX idx_created (created_at)
-            )""",
-            """CREATE TABLE IF NOT EXISTS notes (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id BIGINT,
-                title VARCHAR(100),
-                content TEXT,
-                updated_at DATETIME,
-                UNIQUE KEY unique_note (user_id, title),
-                INDEX idx_user_note (user_id)
-            )""",
-            """CREATE TABLE IF NOT EXISTS mail_sessions_v2 (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                user_id BIGINT,
-                email VARCHAR(255),
-                password VARCHAR(255),
-                token VARCHAR(500),
-                last_msg_id VARCHAR(100),
-                created_at DATETIME,
-                INDEX idx_user_mail (user_id),
-                INDEX idx_created (created_at)
-            )"""
-        ]
-        async with self.pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                for q in queries:
-                    await cur.execute(q)
-
-    async def recreate_tables(self):
-        drop_queries = [
-            "DROP TABLE IF EXISTS mail_sessions_v2",
-            "DROP TABLE IF EXISTS notes",
-            "DROP TABLE IF EXISTS activity_logs",
-            "DROP TABLE IF EXISTS bot_state",
-            "DROP TABLE IF EXISTS banned",
-            "DROP TABLE IF EXISTS admins",
-            "DROP TABLE IF EXISTS users",
-        ]
-        async with self.pool.acquire() as conn:
-            async with conn.cursor() as cur:
-                for q in drop_queries:
-                    await cur.execute(q)
-        await self.initialize_tables()
-
-    async def _exec(self, query, args=None, fetch=False, fetch_one=False, dict_cursor=False):
-        """Internal helper for metrics and execution."""
-        start_time = time.time()
-        try:
-            import aiomysql
-            cursor_cls = aiomysql.DictCursor if dict_cursor else aiomysql.Cursor
-            
-            async with self.pool.acquire() as conn:
-                async with conn.cursor(cursor_cls) as cur:
-                    await cur.execute(query, args)
-                    if fetch:
-                        return await cur.fetchall()
-                    if fetch_one:
-                        return await cur.fetchone()
-                    return cur.rowcount
-        except Exception as e:
-            self.metrics['errors'] += 1
-            logging.error(f"DB Query Error: {e} | Query: {query[:50]}...")
-            return None
-        finally:
-            self.metrics['count'] += 1
-            self.metrics['latency_sum'] += (time.time() - start_time)
-
-    # --- USER MANAGEMENT ---
-    
-    async def save_user(self, user_id, username=None, first_name=None):
-        sql = """INSERT INTO users (user_id, username, first_name, last_seen) 
-                 VALUES (%s, %s, %s, NOW()) 
-                 ON DUPLICATE KEY UPDATE username=%s, first_name=%s, last_seen=NOW()"""
-        await self._exec(sql, (user_id, username, first_name, username, first_name))
-
-    async def get_users_batch(self, last_id=0, limit=100):
-        rows = await self._exec("SELECT user_id FROM users WHERE user_id > %s ORDER BY user_id ASC LIMIT %s", (last_id, limit), fetch=True)
-        return [row[0] for row in rows] if rows else []
-
-    async def get_users_count(self):
-        row = await self._exec("SELECT COUNT(1) FROM users", fetch_one=True)
-        return row[0] if row else 0
-
-    async def get_user_info(self, user_id):
-        data = await self._exec("SELECT * FROM users WHERE user_id = %s", (user_id,), fetch_one=True, dict_cursor=True)
-        if data and 'last_seen' in data and data['last_seen']:
-            data['last_seen'] = data['last_seen'].isoformat()
-        return data
-
-    # --- ADMIN & BANNED ---
-
-    async def get_admins(self, owner_id):
-        cached = await cache.get("admins")
-        if cached: return set(cached)
-
-        admins = {int(owner_id)}
-        rows = await self._exec("SELECT user_id FROM admins", fetch=True)
-        if rows:
-            for row in rows: admins.add(int(row[0]))
-        await cache.set("admins", admins, CACHE_TTL)
-        return admins
-
-    async def add_admin(self, user_id, username=None):
-        affected = await self._exec("INSERT IGNORE INTO admins (user_id, username, promoted_at) VALUES (%s, %s, NOW())", (user_id, username))
-        await cache.delete("admins")
-        return affected and affected > 0
-
-    async def remove_admin(self, user_id):
-        await self._exec("DELETE FROM admins WHERE user_id = %s", (user_id,))
-        await cache.delete("admins")
-        return True
-
-    async def get_banned(self):
-        cached = await cache.get("banned")
-        if cached: return set(cached)
-            
-        banned = set()
-        rows = await self._exec("SELECT user_id FROM banned", fetch=True)
-        if rows:
-            for row in rows: banned.add(str(row[0]))
-        await cache.set("banned", banned, CACHE_TTL)
-        return banned
-
-    async def ban_user(self, user_id, username=None, reason="Admin Ban"):
-        sql = """INSERT INTO banned (user_id, username, reason, banned_at) 
-                 VALUES (%s, %s, %s, NOW())
-                 ON DUPLICATE KEY UPDATE reason=%s, banned_at=NOW()"""
-        await self._exec(sql, (user_id, username, reason, reason))
-        await cache.delete("banned")
-        return True
-
-    async def unban_user(self, user_id):
-        await self._exec("DELETE FROM banned WHERE user_id = %s", (user_id,))
-        await cache.delete("banned")
-        return True
-
-    # --- STATE & LOGS ---
-
-    async def save_state(self, state_data):
-        val_str = json.dumps(state_data)
-        sql = "INSERT INTO bot_state (`key`, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s"
-        await self._exec(sql, ("bot_config", val_str, val_str))
-
-    async def load_state(self):
-        row = await self._exec("SELECT value FROM bot_state WHERE `key` = 'bot_config'", fetch_one=True)
-        if row:
-            val = row[0]
-            return json.loads(val) if isinstance(val, str) else val
-        return {}
-
-    async def log_activity(self, admin_id, username, action, details):
-        sql = "INSERT INTO activity_logs (admin_id, username, action, details, created_at) VALUES (%s, %s, %s, %s, NOW())"
-        await self._exec(sql, (admin_id, username, action, details))
-
-    async def get_activity_logs(self, limit=10):
-        sql = "SELECT id, admin_id, username, action, details, created_at FROM activity_logs ORDER BY created_at DESC LIMIT %s"
-        logs = await self._exec(sql, (limit,), fetch=True, dict_cursor=True)
-        if logs:
-            for log in logs:
-                if 'created_at' in log: log['created_at'] = log['created_at'].isoformat()
-        return logs or []
-
-    async def set_config(self, key, value):
-        val_json = json.dumps({"text": value})
-        sql = "INSERT INTO bot_state (`key`, value) VALUES (%s, %s) ON DUPLICATE KEY UPDATE value=%s"
-        await self._exec(sql, (key, val_json, val_json))
-
-    # --- NOTES ---
-
-    async def save_note(self, user_id, title, content):
-        cipher = _get_cipher_suite()
-        encrypted_content = cipher.encrypt(content.encode()).decode()
-        sql = """INSERT INTO notes (user_id, title, content, updated_at) 
-                 VALUES (%s, %s, %s, NOW())
-                 ON DUPLICATE KEY UPDATE content=%s, updated_at=NOW()"""
-        result = await self._exec(sql, (user_id, title, encrypted_content, encrypted_content))
-        return result is not None
-
-    async def get_notes_list(self, user_id):
-        # Select ID and Title explicitly for the menu
-        return await self._exec("SELECT id, title, updated_at FROM notes WHERE user_id = %s ORDER BY id DESC", (user_id,), fetch=True, dict_cursor=True) or []
-
-    async def get_note_content(self, user_id, identifier):
-        # Identifier can be ID (int/digit str) or Title (str)
-        if str(identifier).isdigit():
-            row = await self._exec("SELECT content, title FROM notes WHERE user_id = %s AND id = %s", (user_id, identifier), fetch_one=True, dict_cursor=True)
-        else:
-            row = await self._exec("SELECT content, title FROM notes WHERE user_id = %s AND title = %s", (user_id, identifier), fetch_one=True, dict_cursor=True)
-            
-        if row:
-            cipher = _get_cipher_suite()
-            try:
-                decrypted = cipher.decrypt(row['content'].encode()).decode()
-                return {"title": row['title'], "content": decrypted}
-            except Exception as e:
-                logging.error(f"Decryption failed: {e}")
-                return {"title": row['title'], "content": "[Error: Gagal dekripsi catatan]"}
-        return None
-
-    async def delete_note(self, user_id, identifier):
-        if str(identifier).isdigit():
-            affected = await self._exec("DELETE FROM notes WHERE user_id = %s AND id = %s", (user_id, identifier))
-        else:
-            affected = await self._exec("DELETE FROM notes WHERE user_id = %s AND title = %s", (user_id, identifier))
-        return affected and affected > 0
-
-    # --- MAIL SESSIONS (ADAPTIVE & HISTORY) ---
-
-    async def save_mail_session(self, user_id, email, password, token):
-        # Insert as new history record
-        sql = """INSERT INTO mail_sessions_v2 (user_id, email, password, token, created_at) 
-                 VALUES (%s, %s, %s, %s, NOW())"""
-        result = await self._exec(sql, (user_id, email, password, token))
-        return result is not None
-
-    async def get_mail_session(self, user_id):
-        # Get latest active session (highest ID/created_at)
-        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = %s ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
-
-    async def get_mail_sessions_list(self, user_id, limit=20):
-        # List history
-        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = %s ORDER BY created_at DESC LIMIT %s", (user_id, limit), fetch=True, dict_cursor=True) or []
-
-    async def delete_mail_session(self, user_id, mail_id=None):
-        if mail_id:
-            result = await self._exec(
-                "DELETE FROM mail_sessions_v2 WHERE user_id = %s AND email = %s",
-                (user_id, mail_id)
-            )
-        else:
-            result = await self._exec("DELETE FROM mail_sessions_v2 WHERE user_id = %s", (user_id,))
-        return result is not None
-
-    async def touch_mail_session(self, user_id, mail_id):
-        # Bring to top (Active) by updating created_at
-        result = await self._exec(
-            "UPDATE mail_sessions_v2 SET created_at = NOW() WHERE user_id = %s AND email = %s",
-            (user_id, mail_id)
-        )
-        return result is not None
-
-    async def get_pending_mail_sessions(self, limit=50):
-        return await self._exec(
-            "SELECT user_id, token, last_msg_id FROM mail_sessions_v2 ORDER BY created_at DESC LIMIT %s",
-            (limit,),
-            fetch=True,
-            dict_cursor=True
-        ) or []
-
-    async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None):
-        if last_msg_id:
-            await self._exec(
-                "UPDATE mail_sessions_v2 SET last_msg_id = %s WHERE user_id = %s",
-                (last_msg_id, user_id)
-            )
-
-    async def update_mail_last_id(self, user_id, msg_id):
-        await self.update_mail_check_time(user_id, time.time(), msg_id)
-
 # --- SQLITE IMPLEMENTATION ---
 class AsyncSQLiteAdapter(AsyncDatabaseAdapter):
     def __init__(self, db_path="bot.db"):
@@ -912,6 +570,252 @@ class AsyncSQLiteAdapter(AsyncDatabaseAdapter):
         # Implementation similar
         return [] # Skipped for simplicity in this patch unless needed for core loop
 
+# --- TURSO IMPLEMENTATION (LibSQL) ---
+class AsyncTursoAdapter(AsyncDatabaseAdapter):
+    def __init__(self, url, token):
+        self.url = url
+        self.token = token
+        self.client = None
+        logging.info("✅ Menggunakan Database: Turso (LibSQL Remote)")
+
+    async def initialize(self):
+        import libsql_client
+        self.client = libsql_client.create_client(url=self.url, auth_token=self.token)
+        
+        # Init tables
+        queries = [
+            """CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_seen TEXT
+            )""",
+            """CREATE TABLE IF NOT EXISTS admins (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                promoted_at TEXT
+            )""",
+            """CREATE TABLE IF NOT EXISTS banned (
+                user_id INTEGER PRIMARY KEY,
+                username TEXT,
+                reason TEXT,
+                banned_at TEXT
+            )""",
+            """CREATE TABLE IF NOT EXISTS bot_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )""",
+            """CREATE TABLE IF NOT EXISTS activity_logs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                admin_id INTEGER,
+                username TEXT,
+                action TEXT,
+                details TEXT,
+                created_at TEXT
+            )""",
+            """CREATE TABLE IF NOT EXISTS notes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                title TEXT,
+                content TEXT,
+                updated_at TEXT,
+                UNIQUE (user_id, title)
+            )""",
+            """CREATE TABLE IF NOT EXISTS mail_sessions_v2 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                email TEXT,
+                password TEXT,
+                token TEXT,
+                last_msg_id TEXT,
+                created_at TEXT,
+                next_check_at TEXT
+            )"""
+        ]
+        for q in queries:
+            await self.client.execute(q)
+
+    async def _exec(self, query, args=(), fetch=False, fetch_one=False, dict_cursor=False):
+        try:
+            start_time = time.time()
+            res = await self.client.execute(query, args)
+            self.metrics['count'] += 1
+            self.metrics['latency_sum'] += (time.time() - start_time)
+
+            if fetch:
+                if dict_cursor:
+                    return [dict(zip(res.columns, row)) for row in res.rows]
+                return res.rows
+            if fetch_one:
+                if res.rows:
+                    if dict_cursor:
+                        return dict(zip(res.columns, res.rows[0]))
+                    return res.rows[0]
+                return None
+            return res.rows_affected
+        except Exception as e:
+            self.metrics['errors'] += 1
+            logging.error(f"Turso Query Error: {e} | Query: {query[:50]}")
+            return None
+
+    async def save_user(self, user_id, username=None, first_name=None):
+        sql = """INSERT INTO users (user_id, username, first_name, last_seen) 
+                 VALUES (?, ?, ?, ?) 
+                 ON CONFLICT(user_id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name, last_seen=excluded.last_seen"""
+        now = datetime.utcnow().isoformat()
+        await self._exec(sql, (user_id, username, first_name, now))
+
+    async def get_users_batch(self, last_id=0, limit=100):
+        rows = await self._exec("SELECT user_id FROM users WHERE user_id > ? ORDER BY user_id ASC LIMIT ?", (last_id, limit), fetch=True)
+        return [row[0] for row in rows] if rows else []
+
+    async def get_users_count(self):
+        row = await self._exec("SELECT COUNT(1) FROM users", fetch_one=True)
+        return row[0] if row else 0
+
+    async def get_user_info(self, user_id):
+        return await self._exec("SELECT * FROM users WHERE user_id = ?", (user_id,), fetch_one=True, dict_cursor=True)
+
+    async def get_admins(self, owner_id):
+        cached = await cache.get("admins")
+        if cached: return set(cached)
+        
+        admins = {int(owner_id)}
+        rows = await self._exec("SELECT user_id FROM admins", fetch=True)
+        if rows:
+            for row in rows: admins.add(int(row[0]))
+        await cache.set("admins", list(admins), CACHE_TTL)
+        return admins
+
+    async def add_admin(self, user_id, username=None):
+        await self._exec("INSERT OR IGNORE INTO admins (user_id, username, promoted_at) VALUES (?, ?, ?)", (user_id, username, datetime.utcnow().isoformat()))
+        await cache.delete("admins")
+        return True
+
+    async def remove_admin(self, user_id):
+        await self._exec("DELETE FROM admins WHERE user_id = ?", (user_id,))
+        await cache.delete("admins")
+        return True
+
+    async def get_banned(self):
+        cached = await cache.get("banned")
+        if cached: return set(cached)
+            
+        banned = set()
+        rows = await self._exec("SELECT user_id FROM banned", fetch=True)
+        if rows:
+            for row in rows: banned.add(str(row[0]))
+        await cache.set("banned", list(banned), CACHE_TTL)
+        return banned
+
+    async def ban_user(self, user_id, username=None, reason="Admin Ban"):
+        sql = """INSERT INTO banned (user_id, username, reason, banned_at) 
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT(user_id) DO UPDATE SET reason=excluded.reason, banned_at=excluded.banned_at"""
+        await self._exec(sql, (user_id, username, reason, datetime.utcnow().isoformat()))
+        await cache.delete("banned")
+        return True
+
+    async def unban_user(self, user_id):
+        await self._exec("DELETE FROM banned WHERE user_id = ?", (user_id,))
+        await cache.delete("banned")
+        return True
+
+    async def save_state(self, state_data):
+        val_str = json.dumps(state_data)
+        sql = "INSERT INTO bot_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+        await self._exec(sql, ("bot_config", val_str))
+
+    async def load_state(self):
+        row = await self._exec("SELECT value FROM bot_state WHERE key = 'bot_config'", fetch_one=True)
+        if row:
+            return json.loads(row[0])
+        return {}
+
+    async def log_activity(self, admin_id, username, action, details):
+        sql = "INSERT INTO activity_logs (admin_id, username, action, details, created_at) VALUES (?, ?, ?, ?, ?)"
+        await self._exec(sql, (admin_id, username, action, details, datetime.utcnow().isoformat()))
+
+    async def get_activity_logs(self, limit=10):
+        return await self._exec("SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT ?", (limit,), fetch=True, dict_cursor=True) or []
+
+    async def set_config(self, key, value):
+        val_json = json.dumps({"text": value})
+        sql = "INSERT INTO bot_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+        await self._exec(sql, (key, val_json))
+
+    async def save_note(self, user_id, title, content):
+        cipher = _get_cipher_suite()
+        encrypted_content = cipher.encrypt(content.encode()).decode()
+        sql = """INSERT INTO notes (user_id, title, content, updated_at) 
+                 VALUES (?, ?, ?, ?)
+                 ON CONFLICT(user_id, title) DO UPDATE SET content=excluded.content, updated_at=excluded.updated_at"""
+        res = await self._exec(sql, (user_id, title, encrypted_content, datetime.utcnow().isoformat()))
+        return res is not None
+
+    async def get_notes_list(self, user_id):
+        return await self._exec("SELECT id, title, updated_at FROM notes WHERE user_id = ? ORDER BY id DESC", (user_id,), fetch=True, dict_cursor=True) or []
+
+    async def get_note_content(self, user_id, identifier):
+        if str(identifier).isdigit():
+            row = await self._exec("SELECT content, title FROM notes WHERE user_id = ? AND id = ?", (user_id, identifier), fetch_one=True, dict_cursor=True)
+        else:
+            row = await self._exec("SELECT content, title FROM notes WHERE user_id = ? AND title = ?", (user_id, identifier), fetch_one=True, dict_cursor=True)
+            
+        if row:
+            cipher = _get_cipher_suite()
+            try:
+                decrypted = cipher.decrypt(row['content'].encode()).decode()
+                return {"title": row['title'], "content": decrypted}
+            except:
+                return {"title": row['title'], "content": "[Error: Gagal dekripsi catatan]"}
+        return None
+
+    async def delete_note(self, user_id, identifier):
+        if str(identifier).isdigit():
+            affected = await self._exec("DELETE FROM notes WHERE user_id = ? AND id = ?", (user_id, identifier))
+        else:
+            affected = await self._exec("DELETE FROM notes WHERE user_id = ? AND title = ?", (user_id, identifier))
+        return affected and affected > 0
+
+    async def save_mail_session(self, user_id, email, password, token):
+        sql = """INSERT INTO mail_sessions_v2 (user_id, email, password, token, created_at) 
+                 VALUES (?, ?, ?, ?, ?)"""
+        res = await self._exec(sql, (user_id, email, password, token, datetime.utcnow().isoformat()))
+        return res is not None
+
+    async def get_mail_session(self, user_id):
+        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = ? ORDER BY created_at DESC LIMIT 1", (user_id,), fetch_one=True, dict_cursor=True)
+
+    async def get_mail_sessions_list(self, user_id, limit=20):
+        return await self._exec("SELECT * FROM mail_sessions_v2 WHERE user_id = ? ORDER BY created_at DESC LIMIT ?", (user_id, limit), fetch=True, dict_cursor=True) or []
+
+    async def delete_mail_session(self, user_id, mail_id=None):
+        if mail_id:
+            res = await self._exec("DELETE FROM mail_sessions_v2 WHERE user_id = ? AND email = ?", (user_id, mail_id))
+        else:
+            res = await self._exec("DELETE FROM mail_sessions_v2 WHERE user_id = ?", (user_id,))
+        return res is not None
+
+    async def touch_mail_session(self, user_id, mail_id):
+        sql = "UPDATE mail_sessions_v2 SET created_at = ? WHERE user_id = ? AND email = ?"
+        res = await self._exec(sql, (datetime.utcnow().isoformat(), user_id, mail_id))
+        return res is not None
+
+    async def get_pending_mail_sessions(self, limit=50):
+        now = datetime.utcnow().isoformat()
+        return await self._exec("SELECT user_id, token, last_msg_id FROM mail_sessions_v2 WHERE next_check_at <= ? OR next_check_at IS NULL ORDER BY created_at DESC LIMIT ?", (now, limit), fetch=True, dict_cursor=True) or []
+
+    async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None):
+        next_check = datetime.fromtimestamp(next_check_timestamp).isoformat()
+        if last_msg_id:
+            await self._exec("UPDATE mail_sessions_v2 SET next_check_at = ?, last_msg_id = ? WHERE user_id = ?", (next_check, last_msg_id, user_id))
+        else:
+            await self._exec("UPDATE mail_sessions_v2 SET next_check_at = ? WHERE user_id = ?", (next_check, user_id))
+
+    async def update_mail_last_id(self, user_id, msg_id):
+        await self._exec("UPDATE mail_sessions_v2 SET last_msg_id = ? WHERE user_id = ?", (msg_id, user_id))
+
 # --- UTILS ---
 
 def _get_cipher_suite():
@@ -924,25 +828,19 @@ def _get_cipher_suite():
 adapter: AsyncDatabaseAdapter = None
 
 # Env Config
-TIDB_HOST = os.getenv("TIDB_HOST")
+TURSO_URL = os.getenv("TURSO_URL")
+TURSO_TOKEN = os.getenv("TURSO_TOKEN")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 
 async def init_db():
     global adapter
-    if TIDB_HOST:
+    
+    if TURSO_URL and TURSO_TOKEN:
         try:
-            logging.info("⚙️ Connecting to TiDB (Async)...")
-            adapter = AsyncMySQLAdapter(
-                host=TIDB_HOST,
-                port=int(os.getenv("TIDB_PORT", 4000)),
-                user=os.getenv("TIDB_USER"),
-                password=os.getenv("TIDB_PASSWORD"),
-                db_name=os.getenv("TIDB_DB_NAME", "test"),
-                ssl_ca=os.getenv("TIDB_CA_PATH", "isrgrootx1.pem")
-            )
+            adapter = AsyncTursoAdapter(url=TURSO_URL, token=TURSO_TOKEN)
             await adapter.initialize()
         except Exception as e:
-            logging.error(f"❌ TiDB Async Init Failed: {e}")
+            logging.error(f"❌ Turso Init Failed: {e}")
             adapter = None
 
     if not adapter and SUPABASE_URL:
