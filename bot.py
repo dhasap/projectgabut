@@ -213,13 +213,14 @@ class AccessMiddleware(BaseMiddleware):
                         
                         text = (
                             "<b>🔐 AKSES TERKUNCI</b>\n"
-                            "━━━━━━━━━━━━━━━━━━\n"
-                            "Halo kawan! 👋\n"
-                            "Untuk menggunakan bot ini secara <b>GRATIS</b>, mohon dukung kami dengan bergabung ke channel resmi.\n\n"
-                            "✅ <i>Update Fitur Terbaru</i>\n"
-                            "✅ <i>Info Airdrop Legit</i>\n"
-                            "✅ <i>Komunitas Solid</i>\n\n"
-                            "<b>Klik tombol di bawah untuk membuka kunci!</b> 🔓"
+                            "━━━━━━━━━━━━━━━━━━━\n"
+                            "Halo! 👋\n"
+                            "Untuk mengakses semua fitur premium bot ini secara <b>GRATIS</b>, mohon bergabung dengan channel kami.\n\n"
+                            "✨ <b>Keuntungan Join:</b>\n"
+                            "┌  🚀 <i>Update Fitur & Maintenance</i>\n"
+                            "├  💡 <i>Tutorial & Tips Trik</i>\n"
+                            "└  🎁 <i>Giveaway & Event Eksklusif</i>\n\n"
+                            "<b>Silakan klik tombol di bawah untuk membuka kunci akses!</b> 🔓"
                         )
                         await message.answer(text, reply_markup=kb)
                         raise CancelHandler()
@@ -404,7 +405,7 @@ class ForceSubMiddleware(BaseMiddleware):
             raise CancelHandler()
 
 # Setup Middleware
-dp.middleware.setup(ForceSubMiddleware())
+# dp.middleware.setup(ForceSubMiddleware())
 
 # --- DATABASE SETUP ---
 import database as db
