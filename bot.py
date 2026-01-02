@@ -225,7 +225,7 @@ class AccessMiddleware(BaseMiddleware):
                         await message.answer(text, reply_markup=kb)
                         raise CancelHandler()
                     else:
-                        FORCE_SUB_CACHE[user_id] = current_time + 300
+                        FORCE_SUB_CACHE[user_id] = current_time + 120
                 except CancelHandler:
                     raise
                 except Exception:
@@ -408,33 +408,6 @@ class ForceSubMiddleware(BaseMiddleware):
 
 # Setup Middleware
 # dp.middleware.setup(ForceSubMiddleware())
-
-@dp.chat_member_handler()
-async def on_channel_status_change(update: types.ChatMemberUpdated):
-    """
-    Smart Monitor: Menghapus cache user secara instan jika mereka keluar dari channel.
-    Membutuhkan Bot menjadi Admin di Channel.
-    """
-    if not FORCE_SUB_CHANNEL:
-        return
-
-    # Ambil username channel target (tanpa @)
-    target_username = FORCE_SUB_CHANNEL.replace('@', '').lower()
-    event_username = (update.chat.username or "").lower()
-    
-    # Validasi: Pastikan event ini dari channel target
-    # Jika FORCE_SUB_CHANNEL berupa ID, kita skip check username dan asumsi bot admin di tempat yang benar
-    if target_username and target_username != event_username:
-        return
-
-    user_id = update.from_user.id
-    new_status = update.new_chat_member.status
-    
-    # Jika user keluar atau di-kick
-    if new_status in ['left', 'kicked', 'banned']:
-        if user_id in FORCE_SUB_CACHE:
-            del FORCE_SUB_CACHE[user_id]
-            logging.info(f"Security: User {user_id} left channel. Cache cleared.")
 
 # --- DATABASE SETUP ---
 import database as db
@@ -656,7 +629,7 @@ async def check_sub_callback(callback_query: types.CallbackQuery):
             await callback_query.answer("❌ Kamu belum join channel! Silakan gabung dulu.", show_alert=True)
         else:
             # Update Cache (Allow access)
-            FORCE_SUB_CACHE[user_id] = time.time() + 300
+            FORCE_SUB_CACHE[user_id] = time.time() + 120
             await callback_query.answer("✅ Akses Diterima! Selamat datang.", show_alert=True)
             
             # Delete lock message
@@ -690,7 +663,7 @@ async def check_sub_callback(callback_query: types.CallbackQuery):
             
     except Exception:
         # If error (bot not admin), allow pass to avoid getting stuck
-        FORCE_SUB_CACHE[user_id] = time.time() + 300
+        FORCE_SUB_CACHE[user_id] = time.time() + 120
         await callback_query.answer("⚠️ Bot error, passing allowed.", show_alert=True)
         try: await callback_query.message.delete()
         except: pass
@@ -770,7 +743,7 @@ Contoh:
     elif code == 'm_iban':
         kb = types.InlineKeyboardMarkup(row_width=3)
         # Ambil negara dari scraper
-        countries = list(iban.FAKEIBAN_COUNTRIES.items())
+        countries = list(iban.COUNTRY_NAMES.items())
         
         btns = []
         for c_code, c_name in countries:
@@ -3774,8 +3747,7 @@ async def process_iban_gen(callback_query: types.CallbackQuery):
         f"━━━━━━━━━━━━━━━━━━\n"
         f"<b>Country:</b> {country_name}\n"
         f"<b>IBAN:</b> <code>{iban_res}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"<i>Data generated from fakeiban.org / Faker</i>"
+        f"━━━━━━━━━━━━━━━━━━"
     )
     
     kb = types.InlineKeyboardMarkup()
@@ -3797,7 +3769,7 @@ async def cmd_iban(message: types.Message):
     # Jika tidak ada argumen, tampilkan menu pilihan negara (Inline)
     if not args:
         kb = types.InlineKeyboardMarkup(row_width=3)
-        countries = list(iban.FAKEIBAN_COUNTRIES.items())
+        countries = list(iban.COUNTRY_NAMES.items())
         
         btns = []
         for c_code, c_name in countries:
@@ -3818,7 +3790,7 @@ async def cmd_iban(message: types.Message):
         )
         
     country_code = args.split()[0].lower()
-    if country_code not in iban.FAKEIBAN_COUNTRIES:
+    if country_code not in iban.COUNTRY_NAMES:
          return await message.reply("⚠️ Kode negara tidak didukung atau tidak valid.")
          
     # Loading Effect

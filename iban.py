@@ -1,13 +1,35 @@
 import logging
-import requests
-from bs4 import BeautifulSoup
+from faker import Faker
 
 # Set up logging
 logger = logging.getLogger(__name__)
 
-# Map 2-letter country codes to Country Names for URL (randomiban.com)
-# URL Pattern: https://randomiban.com/?country=Germany
-COUNTRY_NAMES_URL = {
+# Map 2-letter country codes to Faker Locales
+COUNTRY_LOCALES = {
+    'gb': 'en_GB',
+    'de': 'de_DE',
+    'fr': 'fr_FR',
+    'nl': 'nl_NL',
+    'es': 'es_ES',
+    'it': 'it_IT',
+    'ch': 'de_CH',
+    'be': 'nl_BE',
+    'pl': 'pl_PL',
+    'at': 'de_AT',
+    'pt': 'pt_PT',
+    'se': 'sv_SE',
+    'no': 'no_NO',
+    'dk': 'da_DK',
+    'fi': 'fi_FI',
+    'cz': 'cs_CZ',
+    'hu': 'hu_HU',
+    'ie': 'en_IE',
+    'ro': 'ro_RO',
+    'gr': 'el_GR'
+}
+
+# For display purposes in the bot
+COUNTRY_NAMES = {
     'gb': 'United Kingdom',
     'de': 'Germany',
     'fr': 'France',
@@ -30,38 +52,25 @@ COUNTRY_NAMES_URL = {
     'gr': 'Greece'
 }
 
-FAKEIBAN_COUNTRIES = COUNTRY_NAMES_URL
-
 def get_fake_iban(country_code):
     """
-    Hanya melakukan scraping IBAN dari randomiban.com.
-    Tidak ada fallback Faker lokal.
-    Returns: IBAN string or None.
+    Generates a valid fake IBAN for the given country code using Faker.
     """
     country_code = country_code.lower()
-    country_name = COUNTRY_NAMES_URL.get(country_code)
+    locale = COUNTRY_LOCALES.get(country_code)
     
-    if country_name:
-        try:
-            # Scrape from randomiban.com
-            url = f"https://randomiban.com/?country={country_name}"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            response = requests.get(url, headers=headers, timeout=15)
-            
-            if response.status_code == 200:
-                soup = BeautifulSoup(response.text, 'html.parser')
-                # Target: <div id="demo">IBAN...</div>
-                iban_div = soup.find('div', id='demo')
-                if iban_div:
-                    iban_text = iban_div.text.strip()
-                    if iban_text and len(iban_text) > 10: # Basic validation
-                        return iban_text
-        except Exception as e:
-            logger.error(f"Scraping IBAN failed for {country_code}: {e}")
+    if not locale:
+        # Fallback or return None if code not supported
+        return None
 
-    return None
+    try:
+        # Initialize Faker with specific locale
+        fake = Faker(locale)
+        # Generate IBAN
+        return fake.iban()
+    except Exception as e:
+        logger.error(f"Faker IBAN generation failed for {country_code} ({locale}): {e}")
+        return None
 
 def get_country_name(code):
-    return FAKEIBAN_COUNTRIES.get(code.lower(), code.upper())
+    return COUNTRY_NAMES.get(code.lower(), code.upper())
