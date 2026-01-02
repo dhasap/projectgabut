@@ -182,6 +182,70 @@ async def refresh_security_cache():
         
         await asyncio.sleep(60) # Refresh every 1 minute
 
+class AccessMiddleware(BaseMiddleware):
+    """Middleware: Auto-Ban, Rate Limit, Ban, Maintenance, Force Sub."""
+    
+    async def on_process_message(self, message: types.Message, data: dict):
+        user_id = message.from_user.id
+        current_time = time.time()
+        
+        # 2. CEK BANNED (RAM Cache - Non-Blocking)
+        if str(user_id) in LOCAL_BANNED_CACHE:
+             raise CancelHandler()
+             
+        # Pre-fetch Admin Status (RAM Cache - Non-Blocking)
+        is_admin = (user_id == OWNER) or (user_id in LOCAL_ADMINS_CACHE)
+
+        # 3. CEK MAINTENANCE
+        if BOT_STATE["maintenance"] and not is_admin:
+            await message.reply("🚧 <b>BOT UNDER MAINTENANCE</b>\nBot sedang dalam perbaikan. Silakan coba lagi nanti.")
+            raise CancelHandler()
+
+        # 4. FORCE SUBSCRIBE (API Call - Slowest, executed last)
+        if message.chat.type == 'private' and not is_admin:
+            if user_id not in FORCE_SUB_CACHE or current_time > FORCE_SUB_CACHE[user_id]:
+                try:
+                    member = await bot.get_chat_member(FORCE_SUB_CHANNEL, user_id)
+                    if member.status in ['left', 'kicked']:
+                        kb = types.InlineKeyboardMarkup()
+                        kb.add(types.InlineKeyboardButton("🚀 GABUNG CHANNEL", url=f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"))
+                        kb.add(types.InlineKeyboardButton("🔄 CEK STATUS", callback_data="check_sub"))
+                        
+                        text = (
+                            "<b>🔐 AKSES TERKUNCI</b>\n"
+                            "━━━━━━━━━━━━━━━━━━\n"
+                            "Halo kawan! 👋\n"
+                            "Untuk menggunakan bot ini secara <b>GRATIS</b>, mohon dukung kami dengan bergabung ke channel resmi.\n\n"
+                            "✅ <i>Update Fitur Terbaru</i>\n"
+                            "✅ <i>Info Airdrop Legit</i>\n"
+                            "✅ <i>Komunitas Solid</i>\n\n"
+                            "<b>Klik tombol di bawah untuk membuka kunci!</b> 🔓"
+                        )
+                        await message.answer(text, reply_markup=kb)
+                        raise CancelHandler()
+                    else:
+                        FORCE_SUB_CACHE[user_id] = current_time + 300
+                except Exception:
+                    pass
+
+        # 5. SPY MODE CHECK
+        if SPY_MODE and SPY_ADMIN and not is_admin and user_id != SPY_ADMIN:
+            try:
+                spy_msg = (
+                    f"🕵️ <b>SPY ALERT</b>\n"
+                    f"👤 <b>User:</b> {message.from_user.first_name} (@{message.from_user.username})\n"
+                    f"🆔 <code>{user_id}</code>\n"
+                    f"💬 <b>Msg:</b> {message.text}"
+                )
+                await bot.send_message(SPY_ADMIN, spy_msg)
+            except: pass
+
+# Initialize bot and dispatcher
+storage = MemoryStorage()
+bot = Bot(token=TOKEN, parse_mode=types.ParseMode.HTML)
+dp = Dispatcher(bot, storage=storage)
+dp.middleware.setup(AccessMiddleware()) # Register Middleware
+
 # --- CAPTCHA SECURITY SYSTEM ---
 async def initiate_captcha(message: types.Message, state: FSMContext, next_action: dict):
     """
@@ -267,70 +331,6 @@ async def process_captcha_answer(message: types.Message, state: FSMContext):
             "<b>➕ BUAT CATATAN BARU</b>\n\nSilakan kirim <b>Judul Catatan</b> yang ingin dibuat.",
             reply_markup=kb
         )
-
-class AccessMiddleware(BaseMiddleware):
-    """Middleware: Auto-Ban, Rate Limit, Ban, Maintenance, Force Sub."""
-    
-    async def on_process_message(self, message: types.Message, data: dict):
-        user_id = message.from_user.id
-        current_time = time.time()
-        
-        # 2. CEK BANNED (RAM Cache - Non-Blocking)
-        if str(user_id) in LOCAL_BANNED_CACHE:
-             raise CancelHandler()
-             
-        # Pre-fetch Admin Status (RAM Cache - Non-Blocking)
-        is_admin = (user_id == OWNER) or (user_id in LOCAL_ADMINS_CACHE)
-
-        # 3. CEK MAINTENANCE
-        if BOT_STATE["maintenance"] and not is_admin:
-            await message.reply("🚧 <b>BOT UNDER MAINTENANCE</b>\nBot sedang dalam perbaikan. Silakan coba lagi nanti.")
-            raise CancelHandler()
-
-        # 4. FORCE SUBSCRIBE (API Call - Slowest, executed last)
-        if message.chat.type == 'private' and not is_admin:
-            if user_id not in FORCE_SUB_CACHE or current_time > FORCE_SUB_CACHE[user_id]:
-                try:
-                    member = await bot.get_chat_member(FORCE_SUB_CHANNEL, user_id)
-                    if member.status in ['left', 'kicked']:
-                        kb = types.InlineKeyboardMarkup()
-                        kb.add(types.InlineKeyboardButton("🚀 GABUNG CHANNEL", url=f"https://t.me/{FORCE_SUB_CHANNEL.replace('@', '')}"))
-                        kb.add(types.InlineKeyboardButton("🔄 CEK STATUS", callback_data="check_sub"))
-                        
-                        text = (
-                            "<b>🔐 AKSES TERKUNCI</b>\n"
-                            "━━━━━━━━━━━━━━━━━━\n"
-                            "Halo kawan! 👋\n"
-                            "Untuk menggunakan bot ini secara <b>GRATIS</b>, mohon dukung kami dengan bergabung ke channel resmi.\n\n"
-                            "✅ <i>Update Fitur Terbaru</i>\n"
-                            "✅ <i>Info Airdrop Legit</i>\n"
-                            "✅ <i>Komunitas Solid</i>\n\n"
-                            "<b>Klik tombol di bawah untuk membuka kunci!</b> 🔓"
-                        )
-                        await message.answer(text, reply_markup=kb)
-                        raise CancelHandler()
-                    else:
-                        FORCE_SUB_CACHE[user_id] = current_time + 300
-                except Exception:
-                    pass
-
-        # 5. SPY MODE CHECK
-        if SPY_MODE and SPY_ADMIN and not is_admin and user_id != SPY_ADMIN:
-            try:
-                spy_msg = (
-                    f"🕵️ <b>SPY ALERT</b>\n"
-                    f"👤 <b>User:</b> {message.from_user.first_name} (@{message.from_user.username})\n"
-                    f"🆔 <code>{user_id}</code>\n"
-                    f"💬 <b>Msg:</b> {message.text}"
-                )
-                await bot.send_message(SPY_ADMIN, spy_msg)
-            except: pass
-
-# Initialize bot and dispatcher
-storage = MemoryStorage()
-bot = Bot(token=TOKEN, parse_mode=types.ParseMode.HTML)
-dp = Dispatcher(bot, storage=storage)
-dp.middleware.setup(AccessMiddleware()) # Register Middleware
 
 # Configure logging
 # Create file handler
