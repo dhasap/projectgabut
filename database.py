@@ -614,7 +614,7 @@ class AsyncTursoAdapter(AsyncDatabaseAdapter):
 
     async def get_pending_mail_sessions(self, limit=50):
         now = datetime.utcnow().isoformat()
-        rows = await self._exec("SELECT user_id, token, last_msg_id, email, password FROM mail_sessions_v2 WHERE next_check_at <= ? OR next_check_at IS NULL ORDER BY created_at DESC LIMIT ?", (now, limit), fetch=True, dict_cursor=True) or []
+        rows = await self._exec("SELECT id, user_id, token, last_msg_id, email, password FROM mail_sessions_v2 WHERE next_check_at <= ? OR next_check_at IS NULL ORDER BY created_at DESC LIMIT ?", (now, limit), fetch=True, dict_cursor=True) or []
         # No need to decrypt email/pass here unless the bot logic needs them decrypted to login
         # Usually checking mail requires login, so yes:
         for row in rows:
@@ -622,12 +622,12 @@ class AsyncTursoAdapter(AsyncDatabaseAdapter):
             row['password'] = _try_decrypt(row['password'])
         return rows
 
-    async def update_mail_check_time(self, user_id, next_check_timestamp, last_msg_id=None):
+    async def update_mail_check_time(self, session_id, next_check_timestamp, last_msg_id=None):
         next_check = datetime.fromtimestamp(next_check_timestamp).isoformat()
         if last_msg_id:
-            await self._exec("UPDATE mail_sessions_v2 SET next_check_at = ?, last_msg_id = ? WHERE user_id = ?", (next_check, last_msg_id, user_id))
+            await self._exec("UPDATE mail_sessions_v2 SET next_check_at = ?, last_msg_id = ? WHERE id = ?", (next_check, last_msg_id, session_id))
         else:
-            await self._exec("UPDATE mail_sessions_v2 SET next_check_at = ? WHERE user_id = ?", (next_check, user_id))
+            await self._exec("UPDATE mail_sessions_v2 SET next_check_at = ? WHERE id = ?", (next_check, session_id))
 
     async def update_mail_last_id(self, user_id, msg_id):
         await self._exec("UPDATE mail_sessions_v2 SET last_msg_id = ? WHERE user_id = ?", (msg_id, user_id))

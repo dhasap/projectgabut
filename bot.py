@@ -33,6 +33,7 @@ from aiogram.dispatcher.filters.state import State, StatesGroup
 class NoteState(StatesGroup):
     title = State()
     content = State()
+    editing = State()
 
 class MailCustomState(StatesGroup):
     username = State()
@@ -905,10 +906,30 @@ async def cb_notes_main(call: types.CallbackQuery, state: FSMContext):
     await show_notes_menu(call.message.chat.id, call.message.message_id)
     await call.answer()
 
-@dp.callback_query_handler(text="note_list", state="*")
+@dp.callback_query_handler(lambda c: c.data and (c.data == "note_list" or c.data.startswith("note_list_")), state="*")
 async def cb_notes_list(call: types.CallbackQuery):
     user_id = call.from_user.id
     notes = await db.db_get_notes_list(user_id)
+    
+    # Pagination Logic
+    page = 1
+    if call.data.startswith("note_list_"):
+        try:
+            page = int(call.data.split("_")[-1])
+        except:
+            page = 1
+    
+    limit = 5
+    total_notes = len(notes)
+    total_pages = (total_notes + limit - 1) // limit
+    if total_pages == 0: total_pages = 1
+    
+    if page < 1: page = 1
+    if page > total_pages: page = total_pages
+    
+    start_idx = (page - 1) * limit
+    end_idx = start_idx + limit
+    page_items = notes[start_idx:end_idx]
     
     kb = types.InlineKeyboardMarkup(row_width=1)
     text = ""
@@ -916,8 +937,8 @@ async def cb_notes_list(call: types.CallbackQuery):
         kb.add(types.InlineKeyboardButton("➕ Buat Catatan Baru", callback_data="note_add"))
         text = "📭 <b>Belum ada catatan.</b>"
     else:
-        text = "<b>📂 DAFTAR CATATAN ANDA</b>\nPilih catatan untuk membuka:"
-        for n in notes:
+        text = f"<b>📂 DAFTAR CATATAN ANDA</b> ({total_notes})\nHalaman {page}/{total_pages}\nPilih catatan untuk membuka:"
+        for n in page_items:
             title = n.get('title', 'Untitled')
             note_id = n.get('id')
             
@@ -926,16 +947,38 @@ async def cb_notes_list(call: types.CallbackQuery):
                  cb_data = f"nr:{note_id}"
                  kb.add(types.InlineKeyboardButton(f"📄 {title}", callback_data=cb_data))
         
+        # Navigation Buttons
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(types.InlineKeyboardButton("⬅️", callback_data=f"note_list_{page-1}"))
+        else:
+             nav_buttons.append(types.InlineKeyboardButton("⬛", callback_data="ignore"))
+             
+        nav_buttons.append(types.InlineKeyboardButton(f"{page}/{total_pages}", callback_data="ignore"))
+        
+        if page < total_pages:
+            nav_buttons.append(types.InlineKeyboardButton("➡️", callback_data=f"note_list_{page+1}"))
+        else:
+             nav_buttons.append(types.InlineKeyboardButton("⬛", callback_data="ignore"))
+             
+        kb.row(*nav_buttons)
         kb.add(types.InlineKeyboardButton("➕ Tambah", callback_data="note_add"))
     
     kb.add(types.InlineKeyboardButton("🔙 Kembali", callback_data="note_main"))
     
-    await bot.edit_message_text(
-        text,
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=kb
-    )
+    try:
+        await bot.edit_message_text(
+            text,
+            call.message.chat.id,
+            call.message.message_id,
+            reply_markup=kb
+        )
+    except:
+        await bot.send_message(
+            call.message.chat.id,
+            text,
+            reply_markup=kb
+        )
     await call.answer()
 
 @dp.callback_query_handler(text="note_add", state="*")
@@ -1003,12 +1046,14 @@ async def cb_notes_read(call: types.CallbackQuery):
     
     # Use 'nd_ask:{id}' for delete ask
     del_data = f"nd_ask:{identifier}"
+    edit_data = f"ne_ask:{identifier}"
     
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.add(
-        types.InlineKeyboardButton("🗑 Hapus", callback_data=del_data),
-        types.InlineKeyboardButton("🔙 Kembali", callback_data="note_list")
+    kb.row(
+        types.InlineKeyboardButton("✏️ Edit", callback_data=edit_data),
+        types.InlineKeyboardButton("🗑 Hapus", callback_data=del_data)
     )
+    kb.add(types.InlineKeyboardButton("🔙 Kembali", callback_data="note_list"))
     
     if data:
         title = data['title']
@@ -1029,6 +1074,64 @@ async def cb_notes_read(call: types.CallbackQuery):
         reply_markup=kb
     )
     await call.answer()
+
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('ne_ask:'), state="*")
+async def cb_notes_edit_ask(call: types.CallbackQuery, state: FSMContext):
+    identifier = call.data.split(':', 1)[1]
+    data = await db.db_get_note_content(call.from_user.id, identifier)
+    
+    if not data:
+        return await call.answer("Catatan tidak ditemukan.", show_alert=True)
+        
+    await state.update_data(edit_id=identifier)
+    await state.update_data(edit_title=data['title']) # Keep title same for now
+    await NoteState.editing.set()
+    
+    # Send content in mono for copy-paste
+    await call.message.reply(
+        f"✏️ <b>MODE EDIT</b>\n\n"
+        f"Silakan salin teks di bawah, edit, dan kirimkan kembali:\n\n"
+        f"<code>{data['content']}</code>",
+        reply=False
+    )
+    await call.answer()
+
+@dp.message_handler(state=NoteState.editing)
+async def state_note_editing(message: types.Message, state: FSMContext):
+    new_content = message.text.strip()
+    data = await state.get_data()
+    note_id = data.get('edit_id')
+    title = data.get('edit_title') # Use existing title
+    
+    if not note_id or not title:
+        await state.finish()
+        return await message.reply("⚠️ <b>Sesi kadaluarsa.</b> Silakan ulangi dari awal.")
+
+    if len(new_content) > 2000:
+        return await message.reply("⚠️ <b>Catatan Terlalu Panjang!</b>\nMaksimal 2000 karakter.")
+        
+    # Update DB
+    if await db.db_save_note(message.from_user.id, title, new_content):
+        await message.reply("✅ <b>Catatan Berhasil Diperbarui!</b>")
+        await state.finish()
+        # Show detail again? Or list? Let's show detail
+        # But we need to fake callback? No, just send message.
+        text = (
+            f"<b>📝 {title}</b>\n"
+            f"━━━━━━━━━━━━━━━━━━\n"
+            f"<code>{new_content}</code>\n"
+            f"━━━━━━━━━━━━━━━━━━"
+        )
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        kb.row(
+            types.InlineKeyboardButton("✏️ Edit", callback_data=f"ne_ask:{note_id}"),
+            types.InlineKeyboardButton("🗑 Hapus", callback_data=f"nd_ask:{note_id}")
+        )
+        kb.add(types.InlineKeyboardButton("🔙 Kembali", callback_data="note_list"))
+        await message.reply(text, reply_markup=kb)
+    else:
+        await message.reply("❌ <b>Gagal memperbarui database.</b>")
+        await state.finish()
 
 @dp.callback_query_handler(lambda c: c.data and c.data.startswith('nd_ask:'), state="*")
 async def cb_notes_del_ask(call: types.CallbackQuery):
@@ -2900,7 +3003,7 @@ async def show_mail_menu(user_id, message: types.Message = None):
     else:
         await bot.send_message(user_id, text, reply_markup=kb)
 
-async def show_mail_inbox(user_id, message: types.Message = None, edit_message=False):
+async def show_mail_inbox(user_id, message: types.Message = None, edit_message=False, page=1):
     session = await db.db_get_mail_session(user_id)
     if not session:
         text = (
@@ -2915,6 +3018,19 @@ async def show_mail_inbox(user_id, message: types.Message = None, edit_message=F
 
     emails = await get_mail_messages(session['token'])
     emails = emails or []
+    
+    # Pagination Logic
+    total_emails = len(emails)
+    limit = 5
+    total_pages = (total_emails + limit - 1) // limit
+    if total_pages == 0: total_pages = 1
+    
+    if page < 1: page = 1
+    if page > total_pages: page = total_pages
+    
+    start_idx = (page - 1) * limit
+    end_idx = start_idx + limit
+    page_items = emails[start_idx:end_idx]
 
     kb = types.InlineKeyboardMarkup(row_width=1)
     if not emails:
@@ -2925,15 +3041,43 @@ async def show_mail_inbox(user_id, message: types.Message = None, edit_message=F
         )
     else:
         text = (
-            f"<b>📥 INBOX ANDA</b> ({len(emails)} pesan)\n"
+            f"<b>📥 INBOX ANDA</b> ({total_emails} pesan)\n"
+            f"Halaman {page}/{total_pages}\n"
             "Pilih pesan untuk dibuka:"
         )
-        for msg in emails[:10]:
+        for msg in page_items:
             msg_id = msg.get('id')
             subject = msg.get('subject') or "No Subject"
-            sender = msg.get('from', {}).get('address', 'Unknown')
-            label = f"📨 {subject} • {sender}"
-            kb.add(types.InlineKeyboardButton(label[:60], callback_data=f"read_{msg_id}"))
+            
+            # Aesthetic Trimming
+            sender_obj = msg.get('from', {})
+            sender_name = sender_obj.get('name')
+            if not sender_name: 
+                sender_name = sender_obj.get('address', 'Unknown').split('@')[0]
+            
+            # Format: Name | Subject
+            # Max length for button text usually around 30-40 chars comfortable on mobile
+            if len(sender_name) > 10: sender_name = sender_name[:10] + ".."
+            if len(subject) > 20: subject = subject[:20] + ".."
+            
+            label = f"📩 {sender_name} | {subject}"
+            kb.add(types.InlineKeyboardButton(label, callback_data=f"read_{msg_id}"))
+
+        # Navigation Buttons
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(types.InlineKeyboardButton("⬅️", callback_data=f"mail_inbox_{page-1}"))
+        else:
+             nav_buttons.append(types.InlineKeyboardButton("⬛", callback_data="ignore"))
+             
+        nav_buttons.append(types.InlineKeyboardButton(f"{page}/{total_pages}", callback_data="ignore"))
+        
+        if page < total_pages:
+            nav_buttons.append(types.InlineKeyboardButton("➡️", callback_data=f"mail_inbox_{page+1}"))
+        else:
+             nav_buttons.append(types.InlineKeyboardButton("⬛", callback_data="ignore"))
+             
+        kb.row(*nav_buttons)
 
     kb.row(
         types.InlineKeyboardButton("🔄 Refresh", callback_data="refresh_mail"),
@@ -3518,6 +3662,20 @@ async def refresh_mail_callback(callback_query: types.CallbackQuery):
         edit_message=True
     )
 
+@dp.callback_query_handler(lambda c: c.data and c.data.startswith('mail_inbox_'))
+async def mail_inbox_pagination_callback(callback_query: types.CallbackQuery):
+    try:
+        page = int(callback_query.data.split('_')[-1])
+        await bot.answer_callback_query(callback_query.id)
+        await show_mail_inbox(
+            callback_query.from_user.id,
+            message=callback_query.message,
+            edit_message=True,
+            page=page
+        )
+    except Exception as e:
+        await bot.answer_callback_query(callback_query.id, "Error navigating")
+
 
 def get_mail_message_detail(token, msg_id):
     try:
@@ -3728,7 +3886,6 @@ async def process_iban_gen(callback_query: types.CallbackQuery):
     await bot.answer_callback_query(callback_query.id)
     country_code = callback_query.data.split('_')[2]
     
-    # Loading animation
     try:
         await bot.edit_message_text(
             "⏳ <i>Sedang mengambil data IBAN...</i>",
@@ -3738,17 +3895,40 @@ async def process_iban_gen(callback_query: types.CallbackQuery):
         )
     except: pass
     
-    # Run in executor to avoid blocking
-    iban_res = await loop.run_in_executor(None, iban.get_fake_iban, country_code)
+    # Generate and Analyze
+    iban_raw = await loop.run_in_executor(None, iban.get_fake_iban, country_code)
+    
+    if not iban_raw:
+        return await bot.send_message(callback_query.from_user.id, "❌ Gagal membuat IBAN.")
+
+    details = iban.analyze_iban(iban_raw)
     country_name = iban.get_country_name(country_code)
     
-    res_text = (
-        f"<b>🏦 FAKE IBAN RESULT</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Country:</b> {country_name}\n"
-        f"<b>IBAN:</b> <code>{iban_res}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━"
-    )
+    # Build Aesthetic Message
+    msg_lines = [
+        f"<b>🌍 IBAN GENERATOR DETAILS</b>",
+        f"──────────────────────",
+        f"<b>🏳️ Country:</b> {country_code.upper()} - {country_name}",
+        f"<b>🏦 IBAN:</b> <code>{details['iban']}</code>",
+        f"<b>📏 Length:</b> {details['length']} Characters",
+        f"",
+        f"<b>🔢 BBAN Breakdown:</b>"
+    ]
+    
+    if details.get('bank_code'):
+        msg_lines.append(f"• <b>Bank Code:</b> <code>{details['bank_code']}</code>")
+    
+    if details.get('branch_code'):
+        msg_lines.append(f"• <b>Branch/Sort Code:</b> <code>{details['branch_code']}</code>")
+        
+    if details.get('account_number'):
+        msg_lines.append(f"• <b>Account Number:</b> <code>{details['account_number']}</code>")
+        
+    msg_lines.append(f"• <b>Check Digits:</b> <code>{details['check_digits']}</code>")
+    msg_lines.append(f"• <b>Raw BBAN:</b> <code>{details['bban']}</code>")
+    msg_lines.append(f"──────────────────────")
+    
+    res_text = "\n".join(msg_lines)
     
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔄 Generate Lagi", callback_data=f"iban_gen_{country_code}"))
@@ -3766,7 +3946,6 @@ async def process_iban_gen(callback_query: types.CallbackQuery):
 async def cmd_iban(message: types.Message):
     args = message.get_args()
     
-    # Jika tidak ada argumen, tampilkan menu pilihan negara (Inline)
     if not args:
         kb = types.InlineKeyboardMarkup(row_width=3)
         countries = list(iban.COUNTRY_NAMES.items())
@@ -3793,24 +3972,41 @@ async def cmd_iban(message: types.Message):
     if country_code not in iban.COUNTRY_NAMES:
          return await message.reply("⚠️ Kode negara tidak didukung atau tidak valid.")
          
-    # Loading Effect
-    msg = await message.reply("⏳ <b>Sedang generate IBAN...</b>\n<i>Mohon tunggu sebentar...</i>")
+    msg = await message.reply("⏳ <b>Sedang generate IBAN...</b>")
     
-    # Run in executor (Scraping might take a few seconds)
-    iban_res = await loop.run_in_executor(None, iban.get_fake_iban, country_code)
+    iban_raw = await loop.run_in_executor(None, iban.get_fake_iban, country_code)
     
-    if not iban_res:
-        return await msg.edit_text("❌ <b>Gagal Generate IBAN.</b>\nLayanan sedang sibuk atau gangguan jaringan. Silakan coba lagi nanti.")
+    if not iban_raw:
+        return await msg.edit_text("❌ <b>Gagal Generate IBAN.</b>")
 
+    details = iban.analyze_iban(iban_raw)
     country_name = iban.get_country_name(country_code)
     
-    res_text = (
-        f"<b>🏦 FAKE IBAN RESULT</b>\n"
-        f"━━━━━━━━━━━━━━━━━━\n"
-        f"<b>Country:</b> {country_name}\n"
-        f"<b>IBAN:</b> <code>{iban_res}</code>\n"
-        f"━━━━━━━━━━━━━━━━━━"
-    )
+    # Build Aesthetic Message
+    msg_lines = [
+        f"<b>🌍 IBAN GENERATOR DETAILS</b>",
+        f"──────────────────────",
+        f"<b>🏳️ Country:</b> {country_code.upper()} - {country_name}",
+        f"<b>🏦 IBAN:</b> <code>{details['iban']}</code>",
+        f"<b>📏 Length:</b> {details['length']} Characters",
+        f"",
+        f"<b>🔢 BBAN Breakdown:</b>"
+    ]
+    
+    if details.get('bank_code'):
+        msg_lines.append(f"• <b>Bank Code:</b> <code>{details['bank_code']}</code>")
+    
+    if details.get('branch_code'):
+        msg_lines.append(f"• <b>Branch/Sort Code:</b> <code>{details['branch_code']}</code>")
+        
+    if details.get('account_number'):
+        msg_lines.append(f"• <b>Account Number:</b> <code>{details['account_number']}</code>")
+        
+    msg_lines.append(f"• <b>Check Digits:</b> <code>{details['check_digits']}</code>")
+    msg_lines.append(f"• <b>Raw BBAN:</b> <code>{details['bban']}</code>")
+    msg_lines.append(f"──────────────────────")
+    
+    res_text = "\n".join(msg_lines)
     
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("🔄 Generate Lagi", callback_data=f"iban_gen_{country_code}"))
@@ -3864,6 +4060,7 @@ async def auto_check_mail():
 
 async def check_single_mail(data):
     user_id = data['user_id']
+    session_id = data.get('id') # Get Session ID
     token = data.get('token')
     last_id = data.get('last_msg_id')
     
@@ -3903,11 +4100,18 @@ async def check_single_mail(data):
                     if "bot was blocked" in str(e).lower():
                         await db.db_delete_mail_session(user_id)
             
-            # Update last_id & timestamp
-            await db.db_update_mail_check_time(user_id, next_ts, newest_id)
+            # Update last_id & timestamp using session_id
+            if session_id:
+                await db.db_update_mail_check_time(session_id, next_ts, newest_id)
+            else:
+                # Fallback for old code/schema if id missing (should not happen if DB updated)
+                await db.db_update_mail_check_time(user_id, next_ts, newest_id)
         else:
             # No message, just update timestamp
-            await db.db_update_mail_check_time(user_id, next_ts)
+            if session_id:
+                await db.db_update_mail_check_time(session_id, next_ts)
+            else:
+                 await db.db_update_mail_check_time(user_id, next_ts)
         
     except Exception as e:
         # Error (Token invalid?): ignore and try again in next cycle
