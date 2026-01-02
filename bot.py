@@ -3464,25 +3464,13 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     total_items = len(saved)
     total_pages = (total_items + MAX_PER_PAGE - 1) // MAX_PER_PAGE
     
+    if total_pages == 0: total_pages = 1
     if page < 0: page = 0
-    if page >= total_pages and total_pages > 0: page = total_pages - 1
+    if page >= total_pages: page = total_pages - 1
     
     start_idx = page * MAX_PER_PAGE
     end_idx = start_idx + MAX_PER_PAGE
     current_page_items = saved[start_idx:end_idx]
-    
-    # Get Active Session from DB (Single Active)
-    # The new schema allows multiple, but we still treat one as "active" in RAM or via checking?
-    # Actually, the user asked for "Ganti Akun Email".
-    # We can check which one is active if we store "active" flag, or just assume the latest one or similar.
-    # But `db_get_mail_session` returns "one" session. Which one?
-    # In `AsyncMySQLAdapter.get_mail_session`, it does `SELECT * FROM temp_mail_sessions WHERE user_id = %s`.
-    # If there are multiple rows, it returns the first one found (fetch_one).
-    # This might be ambiguous if we have multiple.
-    # But for now, let's assume `db_get_mail_session` returns *a* session.
-    # Ideally we should have an `is_active` flag, but the schema update was just ID change.
-    # Let's check `get_mail_session` implementation again.
-    # It returns `fetch_one`.
     
     sess = await db.db_get_mail_session(user_id)
     current_email = sess['email'] if sess else ''
@@ -3496,6 +3484,8 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
 
         if mode == "del":
             btn_text = f"🗑 Hapus: {email}"
+            # Use absolute index or keep relative? Handler uses relative.
+            # sw_mail_{page}_{i} -> i is relative to page
             cb_data = f"dm_mail_{page}_{i}"
         else:
             btn_text = f"{is_active}{email}"
@@ -3507,11 +3497,16 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
     nav_buttons = []
     if page > 0:
         nav_buttons.append(types.InlineKeyboardButton("⬅️", callback_data=f"m_mail_list:{page-1}:{mode}"))
+    else:
+         nav_buttons.append(types.InlineKeyboardButton("⬛", callback_data="ignore"))
     
-    nav_buttons.append(types.InlineKeyboardButton(f"📄 {page+1}/{total_pages}", callback_data="ignore"))
+    # Page Indicator Button (Center)
+    nav_buttons.append(types.InlineKeyboardButton(f"{page+1}/{total_pages}", callback_data="ignore"))
     
     if page < total_pages - 1:
         nav_buttons.append(types.InlineKeyboardButton("➡️", callback_data=f"m_mail_list:{page+1}:{mode}"))
+    else:
+         nav_buttons.append(types.InlineKeyboardButton("⬛", callback_data="ignore"))
     
     kb.row(*nav_buttons)
     
@@ -3523,17 +3518,18 @@ async def list_emails_callback(callback_query: types.CallbackQuery):
             types.InlineKeyboardButton("🗑 Hapus Akun", callback_data=f"m_mail_list:{page}:del"),
             types.InlineKeyboardButton("🔙 Menu Temp Mail", callback_data="m_mail")
         )
+        kb.add(types.InlineKeyboardButton("📥 Cek Inbox", callback_data="refresh_mail"))
 
-    title_mode = "MENGHAPUS AKUN" if mode == "del" else "Saved Emails"
+    title_mode = "MENGHAPUS AKUN" if mode == "del" else "SAVED EMAILS"
     instr = "Klik akun untuk <b>MENGHAPUS</b> permanen." if mode == "del" else "Klik akun untuk <b>MENGAKTIFKAN</b>."
     
-    text = f"<b>📧 {title_mode} ({total_items})</b>\n{instr}"
+    text = (
+        f"<b>📧 {title_mode} ({total_items})</b>\n"
+        f"Halaman {page+1}/{total_pages}\n"
+        f"{instr}"
+    )
     
-    try:
-        await callback_query.message.edit_text(text, reply_markup=kb)
-    except Exception:
-        pass 
-    await callback_query.answer()
+    await callback_query.message.edit_text(text, reply_markup=kb)
 
 @dp.callback_query_handler(lambda c: c.data.startswith('dm_mail'))
 async def delete_saved_mail_callback(callback_query: types.CallbackQuery):
